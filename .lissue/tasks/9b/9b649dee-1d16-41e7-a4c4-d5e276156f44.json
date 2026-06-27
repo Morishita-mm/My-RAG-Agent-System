@@ -1,0 +1,12 @@
+{
+  "local_id": 10,
+  "global_id": "9b649dee-1d16-41e7-a4c4-d5e276156f44",
+  "title": "Phase 5: 高度なPoC機能 (同期・MCP・自己修復・ログローテーション) の実装",
+  "description": "sync_docs.py, mcp_server.py, log_cleanup.sh, auto_fix_workflow.mdの作成と設定を行います。対象ファイル: sync_docs.py, mcp_server.py, log_cleanup.sh, docs/auto_fix_workflow.md",
+  "status": "Open",
+  "assignee": null,
+  "parent_global_id": null,
+  "linked_files": [],
+  "created_at": "2026-06-27T03:48:48.983Z",
+  "updated_at": "2026-06-27T03:48:48.983Z"
+}

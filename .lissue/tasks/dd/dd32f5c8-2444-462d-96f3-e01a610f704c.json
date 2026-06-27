@@ -1,0 +1,12 @@
+{
+  "local_id": 2,
+  "global_id": "dd32f5c8-2444-462d-96f3-e01a610f704c",
+  "title": "Phase 2: コーディングエージェント (aider) の接続",
+  "description": "aider用の設定ファイル.aider.conf.ymlおよびセットアップガイドを作成し、LiteLLMとの接続を構成します。",
+  "status": "Close",
+  "assignee": null,
+  "parent_global_id": null,
+  "linked_files": [],
+  "created_at": "2026-06-27T03:48:45.364825Z",
+  "updated_at": "2026-06-27T04:02:26.897173Z"
+}

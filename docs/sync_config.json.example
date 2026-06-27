@@ -1,0 +1,14 @@
+{
+  "projects": {
+    "project_a": {
+      "api_base": "http://localhost:8080/v1",
+      "api_key": "YOUR_DIFY_DATASET_API_KEY_A",
+      "dataset_id": "YOUR_DIFY_DATASET_ID_A"
+    },
+    "project_b": {
+      "api_base": "http://localhost:8080/v1",
+      "api_key": "YOUR_DIFY_DATASET_API_KEY_B",
+      "dataset_id": "YOUR_DIFY_DATASET_ID_B"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "dify-knowledge": {
+      "command": "python3",
+      "args": [
+        "/Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/mcp_server.py"
+      ]
+    }
+  }
+}

@@ -1,0 +1,11 @@
+.lissue/data.db
+.env
+.continue/
+.dify_sync_meta.json
+docs/sync_config.json
+__pycache__/
+*.pyc
+tests/*_tmp/
+.DS_Store
+volumes/
+.aider*

@@ -1,0 +1,12 @@
+{
+  "local_id": 3,
+  "global_id": "ab61c1a8-12d9-4449-98dc-75f1dc5f4a38",
+  "title": "Phase 3: RAG基盤 (Dify) の構築",
+  "description": "docker-compose.ymlにDify関連のコンテナ群を追記し、ポート8080での起動と設定手順書を作成します。",
+  "status": "InProgress",
+  "assignee": null,
+  "parent_global_id": null,
+  "linked_files": [],
+  "created_at": "2026-06-27T03:48:45.502208Z",
+  "updated_at": "2026-06-27T04:02:53.948355Z"
+}

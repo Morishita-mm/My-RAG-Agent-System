@@ -1,0 +1,7 @@
+output:
+  default_format: human
+  auto_sync: true
+integration:
+  git_mv_hook: true
+context:
+  strategy: paths_only
