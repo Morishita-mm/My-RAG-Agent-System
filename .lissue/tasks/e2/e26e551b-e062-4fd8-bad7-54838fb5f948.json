@@ -1,0 +1,14 @@
+{
+  "local_id": 12,
+  "global_id": "e26e551b-e062-4fd8-bad7-54838fb5f948",
+  "title": "Difyの再セットアップとドキュメント同期設定の復旧",
+  "description": "Difyのデータベース初期化に伴う、初期セットアップ、モデル追加、新規ナレッジ作成、およびドキュメント自動同期設定(docs/sync_config.json)の復旧作業",
+  "status": "Close",
+  "assignee": null,
+  "parent_global_id": null,
+  "linked_files": [
+    "docs/sync_config.json"
+  ],
+  "created_at": "2026-06-28T00:35:33.397860Z",
+  "updated_at": "2026-06-28T00:39:28.563691Z"
+}

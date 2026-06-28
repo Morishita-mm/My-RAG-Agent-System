@@ -214,10 +214,15 @@ services:
       - ./litellm_config.yaml:/app/config.yaml
     environment:
       - GEMINI_API_KEY
+      - DATABASE_URL=postgresql://postgres:difyai123456@db_postgres:5432/litellm
+      - LITELLM_MASTER_KEY=sk-1234
     env_file:
       - .env
     command: ["--config", "/app/config.yaml"]
     restart: unless-stopped
+    depends_on:
+      db_postgres:
+        condition: service_healthy
 
   # Init container to fix permissions
   init_permissions:

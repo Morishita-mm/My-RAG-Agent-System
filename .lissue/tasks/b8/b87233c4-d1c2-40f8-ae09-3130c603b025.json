@@ -3,10 +3,10 @@
   "global_id": "b87233c4-d1c2-40f8-ae09-3130c603b025",
   "title": "Phase 4: ローカルLLM (Ollama) のハイブリッド運用テスト",
   "description": "Macホスト上でOllamaを起動するためのガイドを作成し、LiteLLMのルーティングにローカルLLMを追加します。",
-  "status": "InProgress",
+  "status": "Close",
   "assignee": null,
   "parent_global_id": null,
   "linked_files": [],
   "created_at": "2026-06-27T03:48:45.618044Z",
-  "updated_at": "2026-06-27T04:47:03.730877Z"
+  "updated_at": "2026-06-27T23:51:13.105821Z"
 }
