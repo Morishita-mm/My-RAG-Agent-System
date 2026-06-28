@@ -44,10 +44,10 @@ def trigger_deploy_script():
         # AUTO_DEPLOY=1 を設定して ragy を実行させ、親のキルによるシグナル強制終了を回避します。
         deploy_cmd = (
             "sleep 2 && "
-            "echo '\\n--- Automated Deploy Triggered ---' >> deploy.log 2>&1 && "
-            "git checkout main >> deploy.log 2>&1 && "
-            "git pull origin main >> deploy.log 2>&1 && "
-            "AUTO_DEPLOY=1 ./ragy restart >> deploy.log 2>&1"
+            "echo '\\n--- Automated Deploy Triggered ---' >> logs/deploy.log 2>&1 && "
+            "git checkout main >> logs/deploy.log 2>&1 && "
+            "git pull origin main >> logs/deploy.log 2>&1 && "
+            "AUTO_DEPLOY=1 ./ragy restart >> logs/deploy.log 2>&1"
         )
         
         subprocess.Popen(

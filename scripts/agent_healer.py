@@ -197,7 +197,7 @@ async def monitor_log_file(log_path: str):
                     logging.error("Could not extract file name from traceback.")
 
 async def main():
-    log_path = "./sync_docs.log"
+    log_path = "./logs/sync_docs.log"
     if len(sys.argv) > 1:
         log_path = sys.argv[1]
     

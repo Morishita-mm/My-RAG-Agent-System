@@ -1,0 +1,164 @@
+
+--- Automated Deploy Triggered ---
+Already on 'main'
+Your branch is up to date with 'origin/main'.
+From https://github.com/Morishita-mm/My-RAG-Agent-System
+ * branch            main       -> FETCH_HEAD
+Already up to date.
+=== Stopping Document Sync Script ===
+Killing sync_docs.py (PID: 62296)...
+=== Stopping Deploy Webhook Listener ===
+Auto-deploy mode detected. Skipping deploy_listener.py kill to prevent process tree termination.
+=== Stopping Docker Containers ===
+ Container my-rag-agent-system-plugin_daemon-1 Stopping 
+ Container my-rag-agent-system-sandbox-1 Stopping 
+ Container my-rag-agent-system-worker-1 Stopping 
+ Container my-rag-agent-system-nginx-1 Stopping 
+ Container my-rag-agent-system-api_websocket-1 Stopping 
+ Container my-rag-agent-system-worker_beat-1 Stopping 
+ Container my-rag-agent-system-ssrf_proxy-1 Stopping 
+ Container my-rag-agent-system-weaviate-1 Stopping 
+ Container litellm_proxy Stopping 
+ Container my-rag-agent-system-plugin_daemon-1 Stopped 
+ Container my-rag-agent-system-plugin_daemon-1 Removing 
+ Container my-rag-agent-system-plugin_daemon-1 Removed 
+ Container my-rag-agent-system-weaviate-1 Stopped 
+ Container my-rag-agent-system-weaviate-1 Removing 
+ Container my-rag-agent-system-weaviate-1 Removed 
+ Container my-rag-agent-system-worker_beat-1 Stopped 
+ Container my-rag-agent-system-worker_beat-1 Removing 
+ Container my-rag-agent-system-api_websocket-1 Stopped 
+ Container my-rag-agent-system-api_websocket-1 Removing 
+ Container my-rag-agent-system-worker_beat-1 Removed 
+ Container my-rag-agent-system-api_websocket-1 Removed 
+ Container my-rag-agent-system-worker-1 Stopped 
+ Container my-rag-agent-system-worker-1 Removing 
+ Container my-rag-agent-system-worker-1 Removed 
+ Container litellm_proxy Stopped 
+ Container litellm_proxy Removing 
+ Container litellm_proxy Removed 
+ Container my-rag-agent-system-nginx-1 Stopped 
+ Container my-rag-agent-system-nginx-1 Removing 
+ Container my-rag-agent-system-sandbox-1 Stopped 
+ Container my-rag-agent-system-sandbox-1 Removing 
+ Container my-rag-agent-system-ssrf_proxy-1 Stopped 
+ Container my-rag-agent-system-ssrf_proxy-1 Removing 
+ Container my-rag-agent-system-nginx-1 Removed 
+ Container my-rag-agent-system-web-1 Stopping 
+ Container my-rag-agent-system-api-1 Stopping 
+ Container my-rag-agent-system-sandbox-1 Removed 
+ Container my-rag-agent-system-ssrf_proxy-1 Removed 
+ Container my-rag-agent-system-web-1 Stopped 
+ Container my-rag-agent-system-web-1 Removing 
+ Container my-rag-agent-system-web-1 Removed 
+ Container my-rag-agent-system-api-1 Stopped 
+ Container my-rag-agent-system-api-1 Removing 
+ Container my-rag-agent-system-api-1 Removed 
+ Container my-rag-agent-system-db_postgres-1 Stopping 
+ Container my-rag-agent-system-init_permissions-1 Stopping 
+ Container my-rag-agent-system-redis-1 Stopping 
+ Container my-rag-agent-system-init_permissions-1 Stopped 
+ Container my-rag-agent-system-init_permissions-1 Removing 
+ Container my-rag-agent-system-init_permissions-1 Removed 
+ Container my-rag-agent-system-db_postgres-1 Stopped 
+ Container my-rag-agent-system-db_postgres-1 Removing 
+ Container my-rag-agent-system-redis-1 Stopped 
+ Container my-rag-agent-system-redis-1 Removing 
+ Container my-rag-agent-system-db_postgres-1 Removed 
+ Container my-rag-agent-system-redis-1 Removed 
+ Network my-rag-agent-system_default Removing 
+ Network my-rag-agent-system_ssrf_proxy_network Removing 
+ Network my-rag-agent-system_default Removed 
+ Network my-rag-agent-system_ssrf_proxy_network Removed 
+
+Successfully stopped RAG services.
+=== [1/5] Checking and Starting Ollama ===
+Ollama is already running.
+=== [2/5] Checking Docker Runtime ===
+Docker is already running.
+=== [3/5] Starting Docker Containers ===
+ Network my-rag-agent-system_ssrf_proxy_network Creating 
+ Network my-rag-agent-system_ssrf_proxy_network Created 
+ Network my-rag-agent-system_default Creating 
+ Network my-rag-agent-system_default Created 
+ Container my-rag-agent-system-redis-1 Creating 
+ Container my-rag-agent-system-web-1 Creating 
+ Container my-rag-agent-system-sandbox-1 Creating 
+ Container my-rag-agent-system-ssrf_proxy-1 Creating 
+ Container my-rag-agent-system-db_postgres-1 Creating 
+ Container my-rag-agent-system-init_permissions-1 Creating 
+ Container my-rag-agent-system-weaviate-1 Creating 
+ Container my-rag-agent-system-weaviate-1 Created 
+ Container my-rag-agent-system-ssrf_proxy-1 Created 
+ Container my-rag-agent-system-sandbox-1 Created 
+ Container my-rag-agent-system-init_permissions-1 Created 
+ Container my-rag-agent-system-web-1 Created 
+ Container my-rag-agent-system-redis-1 Created 
+ Container my-rag-agent-system-db_postgres-1 Created 
+ Container my-rag-agent-system-plugin_daemon-1 Creating 
+ Container my-rag-agent-system-api-1 Creating 
+ Container my-rag-agent-system-worker-1 Creating 
+ Container my-rag-agent-system-worker_beat-1 Creating 
+ Container litellm_proxy Creating 
+ Container my-rag-agent-system-api_websocket-1 Creating 
+ Container my-rag-agent-system-plugin_daemon-1 Created 
+ Container my-rag-agent-system-api-1 Created 
+ Container my-rag-agent-system-nginx-1 Creating 
+ Container my-rag-agent-system-worker-1 Created 
+ Container my-rag-agent-system-api_websocket-1 Created 
+ Container my-rag-agent-system-worker_beat-1 Created 
+ Container litellm_proxy Created 
+ Container my-rag-agent-system-nginx-1 Created 
+ Container my-rag-agent-system-weaviate-1 Starting 
+ Container my-rag-agent-system-db_postgres-1 Starting 
+ Container my-rag-agent-system-ssrf_proxy-1 Starting 
+ Container my-rag-agent-system-init_permissions-1 Starting 
+ Container my-rag-agent-system-sandbox-1 Starting 
+ Container my-rag-agent-system-redis-1 Starting 
+ Container my-rag-agent-system-web-1 Starting 
+ Container my-rag-agent-system-weaviate-1 Started 
+ Container my-rag-agent-system-db_postgres-1 Started 
+ Container my-rag-agent-system-db_postgres-1 Waiting 
+ Container my-rag-agent-system-db_postgres-1 Waiting 
+ Container my-rag-agent-system-sandbox-1 Started 
+ Container my-rag-agent-system-init_permissions-1 Started 
+ Container my-rag-agent-system-redis-1 Started 
+ Container my-rag-agent-system-db_postgres-1 Waiting 
+ Container my-rag-agent-system-init_permissions-1 Waiting 
+ Container my-rag-agent-system-init_permissions-1 Waiting 
+ Container my-rag-agent-system-db_postgres-1 Waiting 
+ Container my-rag-agent-system-init_permissions-1 Waiting 
+ Container my-rag-agent-system-db_postgres-1 Waiting 
+ Container my-rag-agent-system-db_postgres-1 Waiting 
+ Container my-rag-agent-system-web-1 Started 
+ Container my-rag-agent-system-db_postgres-1 Healthy 
+ Container litellm_proxy Starting 
+ Container my-rag-agent-system-db_postgres-1 Healthy 
+ Container my-rag-agent-system-plugin_daemon-1 Starting 
+ Container my-rag-agent-system-ssrf_proxy-1 Started 
+ Container my-rag-agent-system-db_postgres-1 Healthy 
+ Container my-rag-agent-system-db_postgres-1 Healthy 
+ Container my-rag-agent-system-api_websocket-1 Starting 
+ Container my-rag-agent-system-db_postgres-1 Healthy 
+ Container my-rag-agent-system-db_postgres-1 Healthy 
+ Container my-rag-agent-system-init_permissions-1 Exited 
+ Container my-rag-agent-system-worker_beat-1 Starting 
+ Container my-rag-agent-system-init_permissions-1 Exited 
+ Container my-rag-agent-system-worker-1 Starting 
+ Container my-rag-agent-system-init_permissions-1 Exited 
+ Container my-rag-agent-system-api-1 Starting 
+ Container litellm_proxy Started 
+ Container my-rag-agent-system-plugin_daemon-1 Started 
+ Container my-rag-agent-system-api_websocket-1 Started 
+ Container my-rag-agent-system-api-1 Started 
+ Container my-rag-agent-system-nginx-1 Starting 
+ Container my-rag-agent-system-worker-1 Started 
+ Container my-rag-agent-system-worker_beat-1 Started 
+ Container my-rag-agent-system-nginx-1 Started 
+=== [4/5] Starting Document Sync Script ===
+sync_docs.py started in background (Logging to /Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/logs/sync_docs.log).
+=== [5/5] Starting Deploy Webhook Listener ===
+Auto-deploy mode detected. Skipping deploy_listener.py stop.
+deploy_listener.py started in background (Logging to /Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/logs/deploy_listener.log).
+
+Successfully started all RAG services!
