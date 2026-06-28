@@ -106,6 +106,32 @@ start_services() {
   fi
   nohup "$PYTHON_CMD" scripts/deploy_listener.py >"$DEPLOY_LOG" 2>&1 &
   echo "deploy_listener.py started in background (Logging to $DEPLOY_LOG)."
+
+  # --- Ngrokの起動のみを純粋に追加 ---
+  echo "=== [6/6] Starting Ngrok Tunnel ==="
+
+  # init_projectで実績のある抽出ロジックをそのまま流用
+  NGROK_DOMAIN=""
+  if [ -f "$PROJECT_DIR/.env" ]; then
+    local env_key=$(grep '^NGROK_DOMAIN=' "$PROJECT_DIR/.env" | cut -d '=' -f2- | tr -d '"' | tr -d "'")
+    if [ -n "$env_key" ]; then
+      NGROK_DOMAIN="$env_key"
+    fi
+  fi
+
+  if command -v ngrok >/dev/null 2>&1; then
+    if [ -n "$NGROK_DOMAIN" ]; then
+      echo "Starting ngrok tunnel with static domain: $NGROK_DOMAIN"
+      nohup ngrok http --domain="$NGROK_DOMAIN" 8000 >/dev/null 2>&1 &
+      echo "Webhook URL: https://$NGROK_DOMAIN/webhook"
+    else
+      echo "Starting ngrok tunnel with random domain..."
+      nohup ngrok http 8000 >/dev/null 2>&1 &
+    fi
+  else
+    echo "Warning: ngrok is not installed. Webhook tunnel will not be opened."
+  fi
+
   echo ""
   echo "Successfully started all RAG services!"
 }
@@ -156,6 +182,15 @@ stop_services() {
     fi
   fi
 
+  # --- Ngrokの停止のみを純粋に追加 ---
+  echo "=== Stopping Ngrok Tunnel ==="
+  if pgrep -f "ngrok http" >/dev/null 2>&1; then
+    echo "Killing ngrok tunnel..."
+    pkill -f "ngrok http" || true
+  else
+    echo "ngrok is not running."
+  fi
+
   echo "=== Stopping Docker Containers ==="
   docker compose down
 
@@ -199,7 +234,14 @@ show_status() {
     fi
   fi
 
-  # 4. Docker Containers status
+  # 4. Ngrok status
+  if pgrep -f "ngrok http" >/dev/null 2>&1; then
+    echo "Ngrok Tunnel    : RUNNING"
+  else
+    echo "Ngrok Tunnel    : STOPPED"
+  fi
+
+  # 5. Docker Containers status
   echo "Docker Services :"
   docker compose ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
 }
@@ -301,9 +343,9 @@ init_project() {
     else
       # sed を使ってプレースホルダを安全に置換
       sed -e "s|\${MODEL_NAME}|$MODEL_NAME|g" \
-          -e "s|\${API_BASE}|$API_BASE|g" \
-          -e "s|\${API_KEY}|$API_KEY|g" \
-          "$src" >"$dst"
+        -e "s|\${API_BASE}|$API_BASE|g" \
+        -e "s|\${API_KEY}|$API_KEY|g" \
+        "$src" >"$dst"
     fi
   }
 
