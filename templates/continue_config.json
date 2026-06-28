@@ -1,0 +1,14 @@
+{
+  "models": [
+    {
+      "title": "${MODEL_NAME}",
+      "provider": "ollama",
+      "model": "${MODEL_NAME}"
+    }
+  ],
+  "tabAutocompleteModel": {
+    "title": "${MODEL_NAME}",
+    "provider": "ollama",
+    "model": "${MODEL_NAME}"
+  }
+}

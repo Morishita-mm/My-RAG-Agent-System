@@ -1,0 +1,14 @@
+{
+  "local_id": 15,
+  "global_id": "8292d1c5-ed43-450d-bcbb-e749631f91ab",
+  "title": "自動デプロイパイプラインの構築",
+  "description": "FastAPIによるdeploy_listener.pyの実装、docker-composeへの追加、GitHub Webhookによる自動再起動の検証",
+  "status": "Close",
+  "assignee": null,
+  "parent_global_id": null,
+  "linked_files": [
+    "docker-compose.yml"
+  ],
+  "created_at": "2026-06-28T03:45:33.279152Z",
+  "updated_at": "2026-06-28T04:09:43.970365Z"
+}

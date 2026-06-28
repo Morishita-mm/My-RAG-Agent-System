@@ -1,0 +1,8 @@
+model: "${MODEL_NAME}"
+openai-api-base: "${API_BASE}"
+openai-api-key: "${API_KEY}"
+auto-commits: false
+show-model-warnings: false
+# docs/ をコンテキストとして読み込む
+read:
+  - docs

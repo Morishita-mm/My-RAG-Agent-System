@@ -9,3 +9,8 @@ tests/*_tmp/
 .DS_Store
 volumes/
 .aider*
+docs/*
+deploy.log
+deploy_listner.log
+deploy_listener.pid
+sync_docs.log

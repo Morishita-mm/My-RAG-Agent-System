@@ -1,14 +1,7 @@
-2026-06-28 07:52:24,124 - INFO - Loaded project configs: /Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/docs/sync_config.json
-2026-06-28 07:52:24,125 - INFO - Started monitoring folder: ./docs (recursive=True)
-2026-06-28 08:10:54,998 - INFO - Detected file creation: /Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/docs/project_a/guides/aider_setup_guide.md
-2026-06-28 08:10:55,218 - INFO - Successfully uploaded: aider_setup_guide.md to dataset ed3ceadb-fa73-47f0-b02c-488a5d2f814d (ID: 84ee6ebc-79a7-4f48-ba1a-117db802fddb)
-2026-06-28 08:10:55,219 - INFO - Detected file creation: /Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/docs/project_a/guides/auto_fix_workflow.md
-2026-06-28 08:10:55,290 - INFO - Successfully uploaded: auto_fix_workflow.md to dataset ed3ceadb-fa73-47f0-b02c-488a5d2f814d (ID: 5baa35a0-ba58-4a5f-b00c-0e57bddb2afa)
-2026-06-28 08:10:55,291 - INFO - Detected file creation: /Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/docs/project_a/guides/build_requirements.md
-2026-06-28 08:10:55,360 - INFO - Successfully uploaded: build_requirements.md to dataset ed3ceadb-fa73-47f0-b02c-488a5d2f814d (ID: 1f79ebac-937b-492e-9aca-06eee5f4d6a9)
-2026-06-28 08:10:55,360 - INFO - Detected file creation: /Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/docs/project_a/guides/dify_setup_guide.md
-2026-06-28 08:10:55,439 - INFO - Successfully uploaded: dify_setup_guide.md to dataset ed3ceadb-fa73-47f0-b02c-488a5d2f814d (ID: a7035da1-423c-418d-ad1a-02a8e65640e3)
-2026-06-28 08:10:55,440 - INFO - Detected file creation: /Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/docs/project_a/guides/ollama_setup_guide.md
-2026-06-28 08:10:55,509 - INFO - Successfully uploaded: ollama_setup_guide.md to dataset ed3ceadb-fa73-47f0-b02c-488a5d2f814d (ID: 4988b238-4794-46c3-99f6-1ebbcd2a6cba)
-2026-06-28 08:10:55,509 - INFO - Detected file creation: /Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/docs/project_a/guides/system_requirements.md
-2026-06-28 08:10:55,582 - INFO - Successfully uploaded: system_requirements.md to dataset ed3ceadb-fa73-47f0-b02c-488a5d2f814d (ID: 37c8793c-9856-4c83-961f-1d628af44fcb)
+2026-06-28 15:33:45,014 - INFO - Loaded project configs: /Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/docs/sync_config.json
+2026-06-28 15:33:45,026 - INFO - Started monitoring folder: ./docs (recursive=True)
+2026-06-28 15:34:22,741 - INFO - Detected file creation: /Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/docs/test_sync_project/test.md
+2026-06-28 15:34:22,743 - WARNING - No Dify config found for file: /Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/docs/test_sync_project/test.md. Skipping.
+2026-06-28 15:34:22,743 - INFO - Detected file modification: /Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/docs/test_sync_project/test.md
+2026-06-28 15:34:22,743 - WARNING - No Dify config found for file: /Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/docs/test_sync_project/test.md. Skipping.
+2026-06-28 15:34:28,643 - INFO - Detected file deletion: /Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/docs/test_sync_project/test.md

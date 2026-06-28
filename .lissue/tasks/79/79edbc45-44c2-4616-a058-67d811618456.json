@@ -1,0 +1,12 @@
+{
+  "local_id": 14,
+  "global_id": "79edbc45-44c2-4616-a058-67d811618456",
+  "title": "自律的修復機能（Antigravity SDK）の実装",
+  "description": "google-antigravity SDKの導入、agent_healer.pyの作成によるエラー監視とGitHub PRの自動送信の実装",
+  "status": "Close",
+  "assignee": null,
+  "parent_global_id": null,
+  "linked_files": [],
+  "created_at": "2026-06-28T01:10:09.345746Z",
+  "updated_at": "2026-06-28T03:45:24.737542Z"
+}

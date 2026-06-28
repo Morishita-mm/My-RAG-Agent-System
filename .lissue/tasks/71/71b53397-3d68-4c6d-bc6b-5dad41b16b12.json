@@ -1,0 +1,15 @@
+{
+  "local_id": 13,
+  "global_id": "71b53397-3d68-4c6d-bc6b-5dad41b16b12",
+  "title": "Valkey/RedisセマンティックキャッシュおよびLangSmithの導入",
+  "description": "docker-compose.ymlへのValkey/Redis追加、mcp_server.pyでのプロジェクト分離型セマンティックキャッシュとLangSmith連携の実装",
+  "status": "Close",
+  "assignee": null,
+  "parent_global_id": null,
+  "linked_files": [
+    "docker-compose.yml",
+    "mcp_server.py"
+  ],
+  "created_at": "2026-06-28T01:07:36.231562Z",
+  "updated_at": "2026-06-28T01:10:09.338397Z"
+}
