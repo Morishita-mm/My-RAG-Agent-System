@@ -4,8 +4,17 @@
 # ==================================================================
 
 PROJECT_DIR="/Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System"
-SYNC_LOG="$PROJECT_DIR/sync_docs.log"
-DEPLOY_LOG="$PROJECT_DIR/deploy_listener.log"
+SYNC_LOG="$PROJECT_DIR/logs/sync_docs.log"
+DEPLOY_LOG="$PROJECT_DIR/logs/deploy_listener.log"
+
+# Detect correct Python interpreter with required dependencies
+PYTHON_CMD="python3"
+for py in "/Users/mzk/.local/share/mise/installs/python/3.12.12/bin/python3" "python3" "python"; do
+  if $py -c "import requests, watchdog" >/dev/null 2>&1; then
+    PYTHON_CMD=$py
+    break
+  fi
+done
 
 show_usage() {
   echo "Usage: ragy [start|stop|status|restart|init|sync]"
@@ -55,20 +64,20 @@ start_services() {
   docker compose up -d
 
   echo "=== [4/5] Starting Document Sync Script ==="
-  SYNC_PID=$(pgrep -f "python3 sync_docs.py")
+  SYNC_PID=$(pgrep -f "sync_docs.py")
   if [ -n "$SYNC_PID" ]; then
     echo "Stopping existing sync_docs.py (PID: $SYNC_PID)..."
     kill "$SYNC_PID"
     sleep 1
   fi
-  nohup python3 sync_docs.py >"$SYNC_LOG" 2>&1 &
+  nohup "$PYTHON_CMD" scripts/sync_docs.py >"$SYNC_LOG" 2>&1 &
   echo "sync_docs.py started in background (Logging to $SYNC_LOG)."
 
   echo "=== [5/5] Starting Deploy Webhook Listener ==="
   if [ "$AUTO_DEPLOY" = "1" ]; then
     echo "Auto-deploy mode detected. Skipping deploy_listener.py stop."
-  elif [ -f "$PROJECT_DIR/deploy_listener.pid" ]; then
-    DEPLOY_PID=$(cat "$PROJECT_DIR/deploy_listener.pid")
+  elif [ -f "$PROJECT_DIR/logs/deploy_listener.pid" ]; then
+    DEPLOY_PID=$(cat "$PROJECT_DIR/logs/deploy_listener.pid")
     if ps -p "$DEPLOY_PID" >/dev/null 2>&1; then
       echo "Stopping existing deploy_listener.py (PID: $DEPLOY_PID)..."
       kill "$DEPLOY_PID"
@@ -80,14 +89,14 @@ start_services() {
         sleep 1
       done
     fi
-    rm -f "$PROJECT_DIR/deploy_listener.pid"
+    rm -f "$PROJECT_DIR/logs/deploy_listener.pid"
   else
-    DEPLOY_PID=$(pgrep -f "python3 deploy_listener.py")
+    DEPLOY_PID=$(pgrep -f "scripts/deploy_listener.py")
     if [ -n "$DEPLOY_PID" ]; then
       echo "Stopping existing deploy_listener.py (PID: $DEPLOY_PID)..."
       echo "$DEPLOY_PID" | xargs kill -9
       for i in {1..10}; do
-        STILL_RUNNING=$(pgrep -f "python3 deploy_listener.py")
+        STILL_RUNNING=$(pgrep -f "scripts/deploy_listener.py")
         if [ -z "$STILL_RUNNING" ]; then
           break
         fi
@@ -95,7 +104,7 @@ start_services() {
       done
     fi
   fi
-  nohup python3 deploy_listener.py >"$DEPLOY_LOG" 2>&1 &
+  nohup "$PYTHON_CMD" scripts/deploy_listener.py >"$DEPLOY_LOG" 2>&1 &
   echo "deploy_listener.py started in background (Logging to $DEPLOY_LOG)."
   echo ""
   echo "Successfully started all RAG services!"
@@ -104,7 +113,7 @@ start_services() {
 stop_services() {
   cd "$PROJECT_DIR" || exit 1
   echo "=== Stopping Document Sync Script ==="
-  SYNC_PID=$(pgrep -f "python3 sync_docs.py")
+  SYNC_PID=$(pgrep -f "sync_docs.py")
   if [ -n "$SYNC_PID" ]; then
     echo "Killing sync_docs.py (PID: $SYNC_PID)..."
     kill "$SYNC_PID"
@@ -115,8 +124,8 @@ stop_services() {
   echo "=== Stopping Deploy Webhook Listener ==="
   if [ "$AUTO_DEPLOY" = "1" ]; then
     echo "Auto-deploy mode detected. Skipping deploy_listener.py kill to prevent process tree termination."
-  elif [ -f "$PROJECT_DIR/deploy_listener.pid" ]; then
-    DEPLOY_PID=$(cat "$PROJECT_DIR/deploy_listener.pid")
+  elif [ -f "$PROJECT_DIR/logs/deploy_listener.pid" ]; then
+    DEPLOY_PID=$(cat "$PROJECT_DIR/logs/deploy_listener.pid")
     if ps -p "$DEPLOY_PID" >/dev/null 2>&1; then
       echo "Killing deploy_listener.py (PID: $DEPLOY_PID)..."
       kill "$DEPLOY_PID"
@@ -130,9 +139,9 @@ stop_services() {
     else
       echo "deploy_listener.py (PID: $DEPLOY_PID) in PID file is not running."
     fi
-    rm -f "$PROJECT_DIR/deploy_listener.pid"
+    rm -f "$PROJECT_DIR/logs/deploy_listener.pid"
   else
-    DEPLOY_PID=$(pgrep -f "python3 deploy_listener.py" | head -n 1)
+    DEPLOY_PID=$(pgrep -f "scripts/deploy_listener.py" | head -n 1)
     if [ -n "$DEPLOY_PID" ]; then
       echo "Killing deploy_listener.py (PID: $DEPLOY_PID)..."
       kill "$DEPLOY_PID"
@@ -166,7 +175,7 @@ show_status() {
   fi
 
   # 2. Watchdog sync_docs status
-  SYNC_PID=$(pgrep -f "python3 sync_docs.py")
+  SYNC_PID=$(pgrep -f "sync_docs.py")
   if [ -n "$SYNC_PID" ]; then
     echo "Sync Watchdog   : RUNNING (PID: $SYNC_PID)"
   else
@@ -174,15 +183,15 @@ show_status() {
   fi
 
   # 3. Deploy Webhook Listener status
-  if [ -f "$PROJECT_DIR/deploy_listener.pid" ]; then
-    DEPLOY_PID=$(cat "$PROJECT_DIR/deploy_listener.pid")
+  if [ -f "$PROJECT_DIR/logs/deploy_listener.pid" ]; then
+    DEPLOY_PID=$(cat "$PROJECT_DIR/logs/deploy_listener.pid")
     if ps -p "$DEPLOY_PID" >/dev/null 2>&1; then
       echo "Deploy Webhook  : RUNNING (PID: $DEPLOY_PID, Port: 8000)"
     else
       echo "Deploy Webhook  : STOPPED (Stale PID file)"
     fi
   else
-    DEPLOY_PID=$(pgrep -f "python3 deploy_listener.py" | head -n 1)
+    DEPLOY_PID=$(pgrep -f "scripts/deploy_listener.py" | head -n 1)
     if [ -n "$DEPLOY_PID" ]; then
       echo "Deploy Webhook  : RUNNING (PID: $DEPLOY_PID, Port: 8000)"
     else
@@ -343,9 +352,9 @@ sync_project() {
     fi
   fi
 
-  # 3. python3 sync_docs.py --sync-project $project_name を実行
+  # 3. python3 scripts/sync_docs.py --sync-project $project_name を実行
   cd "$PROJECT_DIR" || exit 1
-  python3 sync_docs.py --sync-project "$project_name"
+  "$PYTHON_CMD" scripts/sync_docs.py --sync-project "$project_name"
   local status=$?
 
   cd "$target_dir" || exit 1

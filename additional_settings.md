@@ -36,10 +36,10 @@
 ---
 
 ## 4. Files and Code (主要ファイル一覧)
-- **[mcp_server.py](file:///Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/mcp_server.py)**: Valkeyセマンティックキャッシュ・Ollamaベクトル類似度計算・LangSmith tracingの統合。
-- **[agent_healer.py](file:///Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/agent_healer.py)**: 自律的エラー修復 & PR自動送信エージェント。
-- **[deploy_listener.py](file:///Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/deploy_listener.py)**: 自動デプロイ Webhook レシーバー。
-- **[sync_docs.py](file:///Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/sync_docs.py)**: Watchdog 監視および `--sync-project` による一括同期対応スクリプト。
+- **[mcp_server.py](file:///Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/scripts/mcp_server.py)**: Valkeyセマンティックキャッシュ・Ollamaベクトル類似度計算・LangSmith tracingの統合。
+- **[agent_healer.py](file:///Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/scripts/agent_healer.py)**: 自律的エラー修復 & PR自動送信エージェント。
+- **[deploy_listener.py](file:///Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/scripts/deploy_listener.py)**: 自動デプロイ Webhook レシーバー。
+- **[sync_docs.py](file:///Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/scripts/sync_docs.py)**: Watchdog 監視および `--sync-project` による一括同期対応スクリプト。
 - **[ragy](file:///Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/ragy)**: サービスの起動・停止・ステータス・Webhookキルバイパス・プロジェクト初期化（`init`）・一括同期（`sync`）を含む制御CLI。
 - **[docker-compose.yml](file:///Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/docker-compose.yml)**: Redisポート公開およびLangSmith連携の定義追加。
 

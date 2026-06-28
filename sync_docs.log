@@ -1,7 +1,0 @@
-2026-06-28 15:33:45,014 - INFO - Loaded project configs: /Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/docs/sync_config.json
-2026-06-28 15:33:45,026 - INFO - Started monitoring folder: ./docs (recursive=True)
-2026-06-28 15:34:22,741 - INFO - Detected file creation: /Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/docs/test_sync_project/test.md
-2026-06-28 15:34:22,743 - WARNING - No Dify config found for file: /Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/docs/test_sync_project/test.md. Skipping.
-2026-06-28 15:34:22,743 - INFO - Detected file modification: /Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/docs/test_sync_project/test.md
-2026-06-28 15:34:22,743 - WARNING - No Dify config found for file: /Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/docs/test_sync_project/test.md. Skipping.
-2026-06-28 15:34:28,643 - INFO - Detected file deletion: /Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System/docs/test_sync_project/test.md

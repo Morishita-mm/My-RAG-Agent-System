@@ -19,6 +19,7 @@ class DifySyncHandler(FileSystemEventHandler):
         self.dataset_id = dataset_id
         self.meta_file = meta_file
         self.config_file = config_file or os.path.join(self.watch_dir, "sync_config.json")
+        self.config_mtime = 0
         self.project_configs = self.load_project_configs()
         self.metadata = self.load_metadata()
         self.file_hashes = {}
@@ -41,6 +42,8 @@ class DifySyncHandler(FileSystemEventHandler):
     def load_project_configs(self):
         if os.path.exists(self.config_file):
             try:
+                mtime = os.path.getmtime(self.config_file)
+                self.config_mtime = mtime
                 with open(self.config_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     logging.info(f"Loaded project configs: {self.config_file}")
@@ -50,6 +53,15 @@ class DifySyncHandler(FileSystemEventHandler):
         return {}
 
     def get_project_config(self, file_path):
+        # Check if config file was modified and reload if necessary
+        if os.path.exists(self.config_file):
+            try:
+                mtime = os.path.getmtime(self.config_file)
+                if mtime != self.config_mtime:
+                    self.project_configs = self.load_project_configs()
+            except Exception as e:
+                logging.error(f"Error checking config file modification: {e}")
+
         abs_path = os.path.abspath(file_path)
         try:
             rel_path = os.path.relpath(abs_path, self.watch_dir)

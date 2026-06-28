@@ -113,7 +113,8 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
 
 if __name__ == "__main__":
     # PIDファイルの書き出し
-    pid_file = "deploy_listener.pid"
+    pid_file = "logs/deploy_listener.pid"
+    os.makedirs(os.path.dirname(pid_file), exist_ok=True)
     with open(pid_file, "w") as f:
         f.write(str(os.getpid()))
         
