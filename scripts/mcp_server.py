@@ -38,7 +38,7 @@ def get_current_project():
     if env_proj:
         return env_proj
 
-    continue_config = os.path.join(os.path.dirname(__file__), ".continue/config.json")
+    continue_config = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".continue/config.json")
     if os.path.exists(continue_config):
         try:
             with open(continue_config, 'r', encoding='utf-8') as f:
@@ -54,7 +54,7 @@ def get_current_project():
     return None
 
 def get_dify_config_for_current_project(project_name=None):
-    sync_config_path = os.path.join(os.path.dirname(__file__), "docs/sync_config.json")
+    sync_config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs/sync_config.json")
     if project_name and os.path.exists(sync_config_path):
         try:
             with open(sync_config_path, 'r', encoding='utf-8') as f:
