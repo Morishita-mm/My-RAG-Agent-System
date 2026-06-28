@@ -1,25 +1,25 @@
 #!/bin/bash
-
 # ==================================================================
 # ragy - Local RAG & Agentic Environment Control CLI
 # ==================================================================
 
 PROJECT_DIR="/Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System"
 SYNC_LOG="$PROJECT_DIR/sync_docs.log"
+DEPLOY_LOG="$PROJECT_DIR/deploy_listener.log"
 
 show_usage() {
     echo "Usage: ragy [start|stop|status|restart]"
     echo ""
     echo "Commands:"
-    echo "  start    Start all services (Ollama, Docker Compose, Document Watchdog)"
-    echo "  stop     Stop all services (Docker Compose, Document Watchdog)"
+    echo "  start    Start all services (Ollama, Docker Compose, Watchdogs, Webhook)"
+    echo "  stop     Stop all services (Docker Compose, Watchdogs, Webhook)"
     echo "  restart  Restart all services"
     echo "  status   Show current status of all running services"
 }
 
 start_services() {
     cd "$PROJECT_DIR" || exit 1
-    echo "=== [1/4] Checking and Starting Ollama ==="
+    echo "=== [1/5] Checking and Starting Ollama ==="
     if ! curl -s http://127.0.0.1:11434 > /dev/null; then
         echo "Ollama is not running. Starting Ollama with OLLAMA_HOST=0.0.0.0..."
         OLLAMA_HOST=0.0.0.0 nohup ollama serve > /dev/null 2>&1 &
@@ -36,7 +36,7 @@ start_services() {
         echo "Ollama is already running."
     fi
 
-    echo "=== [2/4] Checking Docker Runtime ==="
+    echo "=== [2/5] Checking Docker Runtime ==="
     if ! docker info > /dev/null 2>&1; then
         echo "Docker is not running. Starting OrbStack..."
         open -a OrbStack
@@ -49,10 +49,10 @@ start_services() {
         echo "Docker is already running."
     fi
 
-    echo "=== [3/4] Starting Docker Containers ==="
+    echo "=== [3/5] Starting Docker Containers ==="
     docker compose up -d
 
-    echo "=== [4/4] Starting Document Sync Script ==="
+    echo "=== [4/5] Starting Document Sync Script ==="
     SYNC_PID=$(pgrep -f "python3 sync_docs.py")
     if [ -n "$SYNC_PID" ]; then
         echo "Stopping existing sync_docs.py (PID: $SYNC_PID)..."
@@ -61,6 +61,40 @@ start_services() {
     fi
     nohup python3 sync_docs.py > "$SYNC_LOG" 2>&1 &
     echo "sync_docs.py started in background (Logging to $SYNC_LOG)."
+
+    echo "=== [5/5] Starting Deploy Webhook Listener ==="
+    if [ "$AUTO_DEPLOY" = "1" ]; then
+        echo "Auto-deploy mode detected. Skipping deploy_listener.py stop."
+    elif [ -f "$PROJECT_DIR/deploy_listener.pid" ]; then
+        DEPLOY_PID=$(cat "$PROJECT_DIR/deploy_listener.pid")
+        if ps -p "$DEPLOY_PID" > /dev/null 2>&1; then
+            echo "Stopping existing deploy_listener.py (PID: $DEPLOY_PID)..."
+            kill "$DEPLOY_PID"
+            for i in {1..10}; do
+                if ! ps -p "$DEPLOY_PID" > /dev/null 2>&1; then
+                    break
+                fi
+                echo "Waiting for old deploy_listener to exit..."
+                sleep 1
+            done
+        fi
+        rm -f "$PROJECT_DIR/deploy_listener.pid"
+    else
+        DEPLOY_PID=$(pgrep -f "python3 deploy_listener.py")
+        if [ -n "$DEPLOY_PID" ]; then
+            echo "Stopping existing deploy_listener.py (PID: $DEPLOY_PID)..."
+            echo "$DEPLOY_PID" | xargs kill -9
+            for i in {1..10}; do
+                STILL_RUNNING=$(pgrep -f "python3 deploy_listener.py")
+                if [ -z "$STILL_RUNNING" ]; then
+                    break
+                fi
+                sleep 1
+            done
+        fi
+    fi
+    nohup python3 deploy_listener.py > "$DEPLOY_LOG" 2>&1 &
+    echo "deploy_listener.py started in background (Logging to $DEPLOY_LOG)."
     echo ""
     echo "Successfully started all RAG services!"
 }
@@ -74,6 +108,41 @@ stop_services() {
         kill "$SYNC_PID"
     else
         echo "sync_docs.py is not running."
+    fi
+
+    echo "=== Stopping Deploy Webhook Listener ==="
+    if [ "$AUTO_DEPLOY" = "1" ]; then
+        echo "Auto-deploy mode detected. Skipping deploy_listener.py kill to prevent process tree termination."
+    elif [ -f "$PROJECT_DIR/deploy_listener.pid" ]; then
+        DEPLOY_PID=$(cat "$PROJECT_DIR/deploy_listener.pid")
+        if ps -p "$DEPLOY_PID" > /dev/null 2>&1; then
+            echo "Killing deploy_listener.py (PID: $DEPLOY_PID)..."
+            kill "$DEPLOY_PID"
+            for i in {1..10}; do
+                if ! ps -p "$DEPLOY_PID" > /dev/null 2>&1; then
+                    break
+                fi
+                echo "Waiting for deploy_listener to exit..."
+                sleep 1
+            done
+        else
+            echo "deploy_listener.py (PID: $DEPLOY_PID) in PID file is not running."
+        fi
+        rm -f "$PROJECT_DIR/deploy_listener.pid"
+    else
+        DEPLOY_PID=$(pgrep -f "python3 deploy_listener.py" | head -n 1)
+        if [ -n "$DEPLOY_PID" ]; then
+            echo "Killing deploy_listener.py (PID: $DEPLOY_PID)..."
+            kill "$DEPLOY_PID"
+            for i in {1..10}; do
+                if ! ps -p "$DEPLOY_PID" > /dev/null 2>&1; then
+                    break
+                fi
+                sleep 1
+            done
+        else
+            echo "deploy_listener.py is not running."
+        fi
     fi
 
     echo "=== Stopping Docker Containers ==="
@@ -102,7 +171,24 @@ show_status() {
         echo "Sync Watchdog   : STOPPED"
     fi
 
-    # 3. Docker Containers status
+    # 3. Deploy Webhook Listener status
+    if [ -f "$PROJECT_DIR/deploy_listener.pid" ]; then
+        DEPLOY_PID=$(cat "$PROJECT_DIR/deploy_listener.pid")
+        if ps -p "$DEPLOY_PID" > /dev/null 2>&1; then
+            echo "Deploy Webhook  : RUNNING (PID: $DEPLOY_PID, Port: 8000)"
+        else
+            echo "Deploy Webhook  : STOPPED (Stale PID file)"
+        fi
+    else
+        DEPLOY_PID=$(pgrep -f "python3 deploy_listener.py" | head -n 1)
+        if [ -n "$DEPLOY_PID" ]; then
+            echo "Deploy Webhook  : RUNNING (PID: $DEPLOY_PID, Port: 8000)"
+        else
+            echo "Deploy Webhook  : STOPPED"
+        fi
+    fi
+
+    # 4. Docker Containers status
     echo "Docker Services :"
     docker compose ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
 }

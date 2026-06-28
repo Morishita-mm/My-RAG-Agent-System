@@ -216,6 +216,9 @@ services:
       - GEMINI_API_KEY
       - DATABASE_URL=postgresql://postgres:difyai123456@db_postgres:5432/litellm
       - LITELLM_MASTER_KEY=sk-1234
+      - LANGSMITH_API_KEY
+      - LANGSMITH_PROJECT
+      - LANGSMITH_TRACING
     env_file:
       - .env
     command: ["--config", "/app/config.yaml"]
@@ -498,6 +501,8 @@ services:
   redis:
     image: redis:6-alpine
     restart: always
+    ports:
+      - "6379:6379"
     environment:
       REDISCLI_AUTH: ${REDIS_PASSWORD:-difyai123456}
     volumes:
