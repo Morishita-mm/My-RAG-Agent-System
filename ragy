@@ -8,7 +8,7 @@ SYNC_LOG="$PROJECT_DIR/sync_docs.log"
 DEPLOY_LOG="$PROJECT_DIR/deploy_listener.log"
 
 show_usage() {
-  echo "Usage: ragy [start|stop|status|restart|init]"
+  echo "Usage: ragy [start|stop|status|restart|init|sync]"
   echo ""
   echo "Commands:"
   echo "  start    Start all services (Ollama, Docker Compose, Document Watchdog)"
@@ -16,6 +16,7 @@ show_usage() {
   echo "  restart  Restart all services"
   echo "  status   Show current status of all running services"
   echo "  init     Initialize current directory for RAG (Creates dataset & symlink)"
+  echo "  sync     Sync all markdown documents in ./docs to Dify dataset"
 }
 
 start_services() {
@@ -311,6 +312,51 @@ init_project() {
   fi
 }
 
+sync_project() {
+  local target_dir=$(pwd)
+  local project_name=$(basename "$target_dir")
+  local config_file="$PROJECT_DIR/docs/sync_config.json"
+
+  echo "=== Syncing Project: $project_name ==="
+
+  # 1. sync_config.json の存在確認
+  if [ ! -f "$config_file" ]; then
+    echo "Error: sync_config.json not found at $config_file."
+    echo "Please run 'ragy init' first."
+    exit 1
+  fi
+
+  # 2. sync_config.json に登録されているか確認
+  if command -v jq >/dev/null 2>&1; then
+    local registered=$(jq -r --arg proj "$project_name" '.projects[$proj]' "$config_file")
+    if [ "$registered" == "null" ] || [ -z "$registered" ]; then
+      echo "Error: Project '$project_name' is not registered in sync_config.json."
+      echo "Please run 'ragy init' in this directory first."
+      exit 1
+    fi
+  else
+    # jqがない場合の簡易フォールバック判定
+    if ! grep -q "\"$project_name\"" "$config_file"; then
+      echo "Error: Project '$project_name' is not registered in sync_config.json."
+      echo "Please run 'ragy init' in this directory first."
+      exit 1
+    fi
+  fi
+
+  # 3. python3 sync_docs.py --sync-project $project_name を実行
+  cd "$PROJECT_DIR" || exit 1
+  python3 sync_docs.py --sync-project "$project_name"
+  local status=$?
+
+  cd "$target_dir" || exit 1
+  if [ $status -eq 0 ]; then
+    echo "=== Sync Complete for $project_name ==="
+  else
+    echo "=== Sync Failed for $project_name ==="
+    exit 1
+  fi
+}
+
 case "$1" in
 start)
   start_services
@@ -328,6 +374,9 @@ status)
   ;;
 init)
   init_project "$2"
+  ;;
+sync)
+  sync_project
   ;;
 *)
   show_usage
