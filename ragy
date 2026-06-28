@@ -8,208 +8,329 @@ SYNC_LOG="$PROJECT_DIR/sync_docs.log"
 DEPLOY_LOG="$PROJECT_DIR/deploy_listener.log"
 
 show_usage() {
-    echo "Usage: ragy [start|stop|status|restart]"
-    echo ""
-    echo "Commands:"
-    echo "  start    Start all services (Ollama, Docker Compose, Watchdogs, Webhook)"
-    echo "  stop     Stop all services (Docker Compose, Watchdogs, Webhook)"
-    echo "  restart  Restart all services"
-    echo "  status   Show current status of all running services"
+  echo "Usage: ragy [start|stop|status|restart|init]"
+  echo ""
+  echo "Commands:"
+  echo "  start    Start all services (Ollama, Docker Compose, Document Watchdog)"
+  echo "  stop     Stop all services (Docker Compose, Document Watchdog)"
+  echo "  restart  Restart all services"
+  echo "  status   Show current status of all running services"
+  echo "  init     Initialize current directory for RAG (Creates dataset & symlink)"
 }
 
 start_services() {
-    cd "$PROJECT_DIR" || exit 1
-    echo "=== [1/5] Checking and Starting Ollama ==="
-    if ! curl -s http://127.0.0.1:11434 > /dev/null; then
-        echo "Ollama is not running. Starting Ollama with OLLAMA_HOST=0.0.0.0..."
-        OLLAMA_HOST=0.0.0.0 nohup ollama serve > /dev/null 2>&1 &
-        
-        for i in {1..15}; do
-            if curl -s http://127.0.0.1:11434 > /dev/null; then
-                echo "Ollama started successfully."
-                break
-            fi
-            echo "Waiting for Ollama..."
-            sleep 1
-        done
-    else
-        echo "Ollama is already running."
-    fi
+  cd "$PROJECT_DIR" || exit 1
+  echo "=== [1/5] Checking and Starting Ollama ==="
+  if ! curl -s http://127.0.0.1:11434 >/dev/null; then
+    echo "Ollama is not running. Starting Ollama with OLLAMA_HOST=0.0.0.0..."
+    OLLAMA_HOST=0.0.0.0 nohup ollama serve >/dev/null 2>&1 &
 
-    echo "=== [2/5] Checking Docker Runtime ==="
-    if ! docker info > /dev/null 2>&1; then
-        echo "Docker is not running. Starting OrbStack..."
-        open -a OrbStack
-        while ! docker info > /dev/null 2>&1; do
-            echo "Waiting for Docker daemon..."
-            sleep 2
-        done
-        echo "Docker is ready."
-    else
-        echo "Docker is already running."
-    fi
+    for i in {1..15}; do
+      if curl -s http://127.0.0.1:11434 >/dev/null; then
+        echo "Ollama started successfully."
+        break
+      fi
+      echo "Waiting for Ollama..."
+      sleep 1
+    done
+  else
+    echo "Ollama is already running."
+  fi
 
-    echo "=== [3/5] Starting Docker Containers ==="
-    docker compose up -d
+  echo "=== [2/5] Checking Docker Runtime ==="
+  if ! docker info >/dev/null 2>&1; then
+    echo "Docker is not running. Starting OrbStack..."
+    open -a OrbStack
+    while ! docker info >/dev/null 2>&1; do
+      echo "Waiting for Docker daemon..."
+      sleep 2
+    done
+    echo "Docker is ready."
+  else
+    echo "Docker is already running."
+  fi
 
-    echo "=== [4/5] Starting Document Sync Script ==="
-    SYNC_PID=$(pgrep -f "python3 sync_docs.py")
-    if [ -n "$SYNC_PID" ]; then
-        echo "Stopping existing sync_docs.py (PID: $SYNC_PID)..."
-        kill "$SYNC_PID"
+  echo "=== [3/5] Starting Docker Containers ==="
+  docker compose up -d
+
+  echo "=== [4/5] Starting Document Sync Script ==="
+  SYNC_PID=$(pgrep -f "python3 sync_docs.py")
+  if [ -n "$SYNC_PID" ]; then
+    echo "Stopping existing sync_docs.py (PID: $SYNC_PID)..."
+    kill "$SYNC_PID"
+    sleep 1
+  fi
+  nohup python3 sync_docs.py >"$SYNC_LOG" 2>&1 &
+  echo "sync_docs.py started in background (Logging to $SYNC_LOG)."
+
+  echo "=== [5/5] Starting Deploy Webhook Listener ==="
+  if [ "$AUTO_DEPLOY" = "1" ]; then
+    echo "Auto-deploy mode detected. Skipping deploy_listener.py stop."
+  elif [ -f "$PROJECT_DIR/deploy_listener.pid" ]; then
+    DEPLOY_PID=$(cat "$PROJECT_DIR/deploy_listener.pid")
+    if ps -p "$DEPLOY_PID" >/dev/null 2>&1; then
+      echo "Stopping existing deploy_listener.py (PID: $DEPLOY_PID)..."
+      kill "$DEPLOY_PID"
+      for i in {1..10}; do
+        if ! ps -p "$DEPLOY_PID" >/dev/null 2>&1; then
+          break
+        fi
+        echo "Waiting for old deploy_listener to exit..."
         sleep 1
+      done
     fi
-    nohup python3 sync_docs.py > "$SYNC_LOG" 2>&1 &
-    echo "sync_docs.py started in background (Logging to $SYNC_LOG)."
-
-    echo "=== [5/5] Starting Deploy Webhook Listener ==="
-    if [ "$AUTO_DEPLOY" = "1" ]; then
-        echo "Auto-deploy mode detected. Skipping deploy_listener.py stop."
-    elif [ -f "$PROJECT_DIR/deploy_listener.pid" ]; then
-        DEPLOY_PID=$(cat "$PROJECT_DIR/deploy_listener.pid")
-        if ps -p "$DEPLOY_PID" > /dev/null 2>&1; then
-            echo "Stopping existing deploy_listener.py (PID: $DEPLOY_PID)..."
-            kill "$DEPLOY_PID"
-            for i in {1..10}; do
-                if ! ps -p "$DEPLOY_PID" > /dev/null 2>&1; then
-                    break
-                fi
-                echo "Waiting for old deploy_listener to exit..."
-                sleep 1
-            done
+    rm -f "$PROJECT_DIR/deploy_listener.pid"
+  else
+    DEPLOY_PID=$(pgrep -f "python3 deploy_listener.py")
+    if [ -n "$DEPLOY_PID" ]; then
+      echo "Stopping existing deploy_listener.py (PID: $DEPLOY_PID)..."
+      echo "$DEPLOY_PID" | xargs kill -9
+      for i in {1..10}; do
+        STILL_RUNNING=$(pgrep -f "python3 deploy_listener.py")
+        if [ -z "$STILL_RUNNING" ]; then
+          break
         fi
-        rm -f "$PROJECT_DIR/deploy_listener.pid"
-    else
-        DEPLOY_PID=$(pgrep -f "python3 deploy_listener.py")
-        if [ -n "$DEPLOY_PID" ]; then
-            echo "Stopping existing deploy_listener.py (PID: $DEPLOY_PID)..."
-            echo "$DEPLOY_PID" | xargs kill -9
-            for i in {1..10}; do
-                STILL_RUNNING=$(pgrep -f "python3 deploy_listener.py")
-                if [ -z "$STILL_RUNNING" ]; then
-                    break
-                fi
-                sleep 1
-            done
-        fi
+        sleep 1
+      done
     fi
-    nohup python3 deploy_listener.py > "$DEPLOY_LOG" 2>&1 &
-    echo "deploy_listener.py started in background (Logging to $DEPLOY_LOG)."
-    echo ""
-    echo "Successfully started all RAG services!"
+  fi
+  nohup python3 deploy_listener.py >"$DEPLOY_LOG" 2>&1 &
+  echo "deploy_listener.py started in background (Logging to $DEPLOY_LOG)."
+  echo ""
+  echo "Successfully started all RAG services!"
 }
 
 stop_services() {
-    cd "$PROJECT_DIR" || exit 1
-    echo "=== Stopping Document Sync Script ==="
-    SYNC_PID=$(pgrep -f "python3 sync_docs.py")
-    if [ -n "$SYNC_PID" ]; then
-        echo "Killing sync_docs.py (PID: $SYNC_PID)..."
-        kill "$SYNC_PID"
-    else
-        echo "sync_docs.py is not running."
-    fi
+  cd "$PROJECT_DIR" || exit 1
+  echo "=== Stopping Document Sync Script ==="
+  SYNC_PID=$(pgrep -f "python3 sync_docs.py")
+  if [ -n "$SYNC_PID" ]; then
+    echo "Killing sync_docs.py (PID: $SYNC_PID)..."
+    kill "$SYNC_PID"
+  else
+    echo "sync_docs.py is not running."
+  fi
 
-    echo "=== Stopping Deploy Webhook Listener ==="
-    if [ "$AUTO_DEPLOY" = "1" ]; then
-        echo "Auto-deploy mode detected. Skipping deploy_listener.py kill to prevent process tree termination."
-    elif [ -f "$PROJECT_DIR/deploy_listener.pid" ]; then
-        DEPLOY_PID=$(cat "$PROJECT_DIR/deploy_listener.pid")
-        if ps -p "$DEPLOY_PID" > /dev/null 2>&1; then
-            echo "Killing deploy_listener.py (PID: $DEPLOY_PID)..."
-            kill "$DEPLOY_PID"
-            for i in {1..10}; do
-                if ! ps -p "$DEPLOY_PID" > /dev/null 2>&1; then
-                    break
-                fi
-                echo "Waiting for deploy_listener to exit..."
-                sleep 1
-            done
-        else
-            echo "deploy_listener.py (PID: $DEPLOY_PID) in PID file is not running."
+  echo "=== Stopping Deploy Webhook Listener ==="
+  if [ "$AUTO_DEPLOY" = "1" ]; then
+    echo "Auto-deploy mode detected. Skipping deploy_listener.py kill to prevent process tree termination."
+  elif [ -f "$PROJECT_DIR/deploy_listener.pid" ]; then
+    DEPLOY_PID=$(cat "$PROJECT_DIR/deploy_listener.pid")
+    if ps -p "$DEPLOY_PID" >/dev/null 2>&1; then
+      echo "Killing deploy_listener.py (PID: $DEPLOY_PID)..."
+      kill "$DEPLOY_PID"
+      for i in {1..10}; do
+        if ! ps -p "$DEPLOY_PID" >/dev/null 2>&1; then
+          break
         fi
-        rm -f "$PROJECT_DIR/deploy_listener.pid"
+        echo "Waiting for deploy_listener to exit..."
+        sleep 1
+      done
     else
-        DEPLOY_PID=$(pgrep -f "python3 deploy_listener.py" | head -n 1)
-        if [ -n "$DEPLOY_PID" ]; then
-            echo "Killing deploy_listener.py (PID: $DEPLOY_PID)..."
-            kill "$DEPLOY_PID"
-            for i in {1..10}; do
-                if ! ps -p "$DEPLOY_PID" > /dev/null 2>&1; then
-                    break
-                fi
-                sleep 1
-            done
-        else
-            echo "deploy_listener.py is not running."
-        fi
+      echo "deploy_listener.py (PID: $DEPLOY_PID) in PID file is not running."
     fi
+    rm -f "$PROJECT_DIR/deploy_listener.pid"
+  else
+    DEPLOY_PID=$(pgrep -f "python3 deploy_listener.py" | head -n 1)
+    if [ -n "$DEPLOY_PID" ]; then
+      echo "Killing deploy_listener.py (PID: $DEPLOY_PID)..."
+      kill "$DEPLOY_PID"
+      for i in {1..10}; do
+        if ! ps -p "$DEPLOY_PID" >/dev/null 2>&1; then
+          break
+        fi
+        sleep 1
+      done
+    else
+      echo "deploy_listener.py is not running."
+    fi
+  fi
 
-    echo "=== Stopping Docker Containers ==="
-    docker compose down
+  echo "=== Stopping Docker Containers ==="
+  docker compose down
 
-    echo ""
-    echo "Successfully stopped RAG services."
+  echo ""
+  echo "Successfully stopped RAG services."
 }
 
 show_status() {
-    cd "$PROJECT_DIR" || exit 1
-    echo "=== RAG System Status ==="
-    
-    # 1. Ollama status
-    if curl -s http://127.0.0.1:11434 > /dev/null; then
-        echo "Ollama          : RUNNING (127.0.0.1:11434)"
+  cd "$PROJECT_DIR" || exit 1
+  echo "=== RAG System Status ==="
+
+  # 1. Ollama status
+  if curl -s http://127.0.0.1:11434 >/dev/null; then
+    echo "Ollama          : RUNNING (127.0.0.1:11434)"
+  else
+    echo "Ollama          : STOPPED"
+  fi
+
+  # 2. Watchdog sync_docs status
+  SYNC_PID=$(pgrep -f "python3 sync_docs.py")
+  if [ -n "$SYNC_PID" ]; then
+    echo "Sync Watchdog   : RUNNING (PID: $SYNC_PID)"
+  else
+    echo "Sync Watchdog   : STOPPED"
+  fi
+
+  # 3. Deploy Webhook Listener status
+  if [ -f "$PROJECT_DIR/deploy_listener.pid" ]; then
+    DEPLOY_PID=$(cat "$PROJECT_DIR/deploy_listener.pid")
+    if ps -p "$DEPLOY_PID" >/dev/null 2>&1; then
+      echo "Deploy Webhook  : RUNNING (PID: $DEPLOY_PID, Port: 8000)"
     else
-        echo "Ollama          : STOPPED"
+      echo "Deploy Webhook  : STOPPED (Stale PID file)"
+    fi
+  else
+    DEPLOY_PID=$(pgrep -f "python3 deploy_listener.py" | head -n 1)
+    if [ -n "$DEPLOY_PID" ]; then
+      echo "Deploy Webhook  : RUNNING (PID: $DEPLOY_PID, Port: 8000)"
+    else
+      echo "Deploy Webhook  : STOPPED"
+    fi
+  fi
+
+  # 4. Docker Containers status
+  echo "Docker Services :"
+  docker compose ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
+}
+
+init_project() {
+  local dataset_id=$1
+  local target_dir=$(pwd)
+  local project_name=$(basename "$target_dir")
+  local rag_docs_dir="$PROJECT_DIR/docs/$project_name"
+  local config_file="$PROJECT_DIR/docs/sync_config.json"
+
+  # RAG環境の .env から必要な環境変数だけを安全にロード
+  if [ -f "$PROJECT_DIR/.env" ]; then
+    local env_key=$(grep '^DIFY_DATASET_API_KEY=' "$PROJECT_DIR/.env" | cut -d '=' -f2- | tr -d '"' | tr -d "'")
+    if [ -n "$env_key" ]; then
+      export DIFY_DATASET_API_KEY="$env_key"
+    fi
+  fi
+
+  local api_base="${DIFY_API_BASE:-http://localhost:8080/v1}"
+  local api_key="$DIFY_DATASET_API_KEY"
+
+  if [ -z "$api_key" ]; then
+    echo "Error: DIFY_DATASET_API_KEY is not set in environment or .env file."
+    exit 1
+  fi
+
+  echo "=== Initializing Project: $project_name ==="
+
+  # 1. Dataset ID が未指定なら Dify API で新規作成
+  if [ -z "$dataset_id" ]; then
+    echo "Dataset ID not provided. Creating a new dataset '$project_name' in Dify..."
+
+    # 事前に Dify API に疎通できるか簡易チェック
+    if ! curl -s --connect-timeout 3 "$api_base/datasets" -H "Authorization: Bearer $api_key" >/dev/null; then
+      echo "Error: Cannot connect to Dify API. Please verify that RAG services are running ('ragy start')."
+      exit 1
     fi
 
-    # 2. Watchdog sync_docs status
-    SYNC_PID=$(pgrep -f "python3 sync_docs.py")
-    if [ -n "$SYNC_PID" ]; then
-        echo "Sync Watchdog   : RUNNING (PID: $SYNC_PID)"
-    else
-        echo "Sync Watchdog   : STOPPED"
-    fi
+    local response=$(curl -s -X POST "$api_base/datasets" \
+      -H "Authorization: Bearer $api_key" \
+      -H "Content-Type: application/json" \
+      -d "{\"name\": \"$project_name\"}")
 
-    # 3. Deploy Webhook Listener status
-    if [ -f "$PROJECT_DIR/deploy_listener.pid" ]; then
-        DEPLOY_PID=$(cat "$PROJECT_DIR/deploy_listener.pid")
-        if ps -p "$DEPLOY_PID" > /dev/null 2>&1; then
-            echo "Deploy Webhook  : RUNNING (PID: $DEPLOY_PID, Port: 8000)"
-        else
-            echo "Deploy Webhook  : STOPPED (Stale PID file)"
-        fi
-    else
-        DEPLOY_PID=$(pgrep -f "python3 deploy_listener.py" | head -n 1)
-        if [ -n "$DEPLOY_PID" ]; then
-            echo "Deploy Webhook  : RUNNING (PID: $DEPLOY_PID, Port: 8000)"
-        else
-            echo "Deploy Webhook  : STOPPED"
-        fi
-    fi
+    dataset_id=$(echo "$response" | jq -r '.id')
 
-    # 4. Docker Containers status
-    echo "Docker Services :"
-    docker compose ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
+    if [ "$dataset_id" == "null" ] || [ -z "$dataset_id" ]; then
+      echo "Error: Failed to create dataset via Dify API."
+      echo "API Response: $response"
+      exit 1
+    fi
+    echo "Successfully created dataset in Dify. ID: $dataset_id"
+  else
+    echo "Using provided Dataset ID: $dataset_id"
+  fi
+
+  # 2. RAGシステム側の実体ディレクトリ作成
+  if [ ! -d "$rag_docs_dir" ]; then
+    mkdir -p "$rag_docs_dir"
+    echo "Created physical directory: $rag_docs_dir"
+  fi
+
+  # 3. カレントディレクトリへのシンボリックリンク作成 (リンク切れリンクも安全に回避)
+  if [ ! -e "$target_dir/docs" ] && [ ! -L "$target_dir/docs" ]; then
+    ln -s "$rag_docs_dir" "$target_dir/docs"
+    echo "Created symbolic link './docs' pointing to RAG system."
+  else
+    echo "Warning: './docs' (or a broken link) already exists in the current directory. Skipping link creation."
+  fi
+
+  # 4. sync_config.json の自動更新
+  if [ ! -f "$config_file" ]; then
+    echo '{"projects": {}}' >"$config_file"
+  fi
+
+  jq --arg proj "$project_name" \
+    --arg did "$dataset_id" \
+    --arg key "$api_key" \
+    --arg base "$api_base" \
+    '.projects[$proj] = {"dataset_id": $did, "api_key": $key, "api_base": $base}' \
+    "$config_file" >"${config_file}.tmp" && mv "${config_file}.tmp" "$config_file"
+
+  echo "Successfully registered $project_name to sync_config.json."
+  echo "Initialization complete! You can now put markdown files into ./docs"
+
+  local template_dir="$PROJECT_DIR/templates"
+
+  # プレースホルダに埋め込む変数を定義
+  export MODEL_NAME="openai/gemini-3.5-flash"
+  export API_BASE="http://localhost:4000/v1"
+  export API_KEY="sk-1234"
+
+  # テンプレート適用関数（envsubst がない場合は sed を使う）
+  apply_template() {
+    local src=$1
+    local dst=$2
+    if command -v envsubst >/dev/null 2>&1; then
+      envsubst <"$src" >"$dst"
+    else
+      # sed を使ってプレースホルダを安全に置換
+      sed -e "s|\${MODEL_NAME}|$MODEL_NAME|g" \
+          -e "s|\${API_BASE}|$API_BASE|g" \
+          -e "s|\${API_KEY}|$API_KEY|g" \
+          "$src" >"$dst"
+    fi
+  }
+
+  # Aider設定の展開
+  if [ ! -f ".aider.conf.yml" ]; then
+    apply_template "$template_dir/aider.conf.yml" ".aider.conf.yml"
+    echo "Created .aider.conf.yml"
+  fi
+
+  # Continue設定の展開
+  mkdir -p .continue
+  if [ ! -f ".continue/config.json" ]; then
+    apply_template "$template_dir/continue_config.json" ".continue/config.json"
+    echo "Created .continue/config.json"
+  fi
 }
 
 case "$1" in
-    start)
-        start_services
-        ;;
-    stop)
-        stop_services
-        ;;
-    restart)
-        stop_services
-        sleep 2
-        start_services
-        ;;
-    status)
-        show_status
-        ;;
-    *)
-        show_usage
-        exit 1
-        ;;
+start)
+  start_services
+  ;;
+stop)
+  stop_services
+  ;;
+restart)
+  stop_services
+  sleep 2
+  start_services
+  ;;
+status)
+  show_status
+  ;;
+init)
+  init_project "$2"
+  ;;
+*)
+  show_usage
+  exit 1
+  ;;
 esac
