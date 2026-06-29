@@ -20,8 +20,8 @@ show_usage() {
   echo "Usage: ragy [start|stop|status|restart|init|sync]"
   echo ""
   echo "Commands:"
-  echo "  start    Start all services (Ollama, Docker Compose, Document Watchdog)"
-  echo "  stop     Stop all services (Docker Compose, Document Watchdog)"
+  echo "  start    Start all services (Ollama, Docker Compose, Document Watchdog, Queue Worker)"
+  echo "  stop     Stop all services (Docker Compose, Document Watchdog, Queue Worker)"
   echo "  restart  Restart all services"
   echo "  status   Show current status of all running services"
   echo "  init     Initialize current directory for RAG (Creates dataset & symlink)"
@@ -107,8 +107,21 @@ start_services() {
   nohup "$PYTHON_CMD" scripts/deploy_listener.py >"$DEPLOY_LOG" 2>&1 &
   echo "deploy_listener.py started in background (Logging to $DEPLOY_LOG)."
 
+  echo "=== [6/7] Starting Async Queue Worker ==="
+  if [ -f "$PROJECT_DIR/logs/worker.pid" ]; then
+    WORKER_PID=$(cat "$PROJECT_DIR/logs/worker.pid")
+    if ps -p "$WORKER_PID" >/dev/null 2>&1; then
+      echo "Stopping existing worker.py (PID: $WORKER_PID)..."
+      kill "$WORKER_PID"
+      sleep 1
+    fi
+    rm -f "$PROJECT_DIR/logs/worker.pid"
+  fi
+  nohup "$PYTHON_CMD" scripts/worker.py >"$PROJECT_DIR/logs/worker.log" 2>&1 &
+  echo "worker.py started in background (Logging to $PROJECT_DIR/logs/worker.log)."
+
   # --- Ngrokの起動のみを純粋に追加 ---
-  echo "=== [6/6] Starting Ngrok Tunnel ==="
+  echo "=== [7/7] Starting Ngrok Tunnel ==="
 
   # init_projectで実績のある抽出ロジックをそのまま流用
   NGROK_DOMAIN=""
@@ -182,6 +195,33 @@ stop_services() {
     fi
   fi
 
+  echo "=== Stopping Async Queue Worker ==="
+  if [ -f "$PROJECT_DIR/logs/worker.pid" ]; then
+    WORKER_PID=$(cat "$PROJECT_DIR/logs/worker.pid")
+    if ps -p "$WORKER_PID" >/dev/null 2>&1; then
+      echo "Killing worker.py (PID: $WORKER_PID)..."
+      kill "$WORKER_PID"
+      for i in {1..10}; do
+        if ! ps -p "$WORKER_PID" >/dev/null 2>&1; then
+          break
+        fi
+        echo "Waiting for worker to exit..."
+        sleep 1
+      done
+    else
+      echo "worker.py (PID: $WORKER_PID) in PID file is not running."
+    fi
+    rm -f "$PROJECT_DIR/logs/worker.pid"
+  else
+    WORKER_PID=$(pgrep -f "scripts/worker.py" | head -n 1)
+    if [ -n "$WORKER_PID" ]; then
+      echo "Killing worker.py (PID: $WORKER_PID)..."
+      kill "$WORKER_PID"
+    else
+      echo "worker.py is not running."
+    fi
+  fi
+
   # --- Ngrokの停止のみを純粋に追加 ---
   echo "=== Stopping Ngrok Tunnel ==="
   if pgrep -f "ngrok http" >/dev/null 2>&1; then
@@ -231,6 +271,23 @@ show_status() {
       echo "Deploy Webhook  : RUNNING (PID: $DEPLOY_PID, Port: 8000)"
     else
       echo "Deploy Webhook  : STOPPED"
+    fi
+  fi
+
+  # 3.5. Async Queue Worker status
+  if [ -f "$PROJECT_DIR/logs/worker.pid" ]; then
+    WORKER_PID=$(cat "$PROJECT_DIR/logs/worker.pid")
+    if ps -p "$WORKER_PID" >/dev/null 2>&1; then
+      echo "Queue Worker    : RUNNING (PID: $WORKER_PID)"
+    else
+      echo "Queue Worker    : STOPPED (Stale PID file)"
+    fi
+  else
+    WORKER_PID=$(pgrep -f "scripts/worker.py" | head -n 1)
+    if [ -n "$WORKER_PID" ]; then
+      echo "Queue Worker    : RUNNING (PID: $WORKER_PID)"
+    else
+      echo "Queue Worker    : STOPPED"
     fi
   fi
 

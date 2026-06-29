@@ -6,6 +6,8 @@ import logging
 import hashlib
 import requests
 import argparse
+import redis
+import uuid
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
@@ -23,6 +25,45 @@ class DifySyncHandler(FileSystemEventHandler):
         self.project_configs = self.load_project_configs()
         self.metadata = self.load_metadata()
         self.file_hashes = {}
+        for file_path, val in self.metadata.items():
+            if isinstance(val, dict) and "hash" in val:
+                self.file_hashes[file_path] = val["hash"]
+                
+        # Redis接続初期化
+        self.redis_enabled = False
+        try:
+            redis_host = os.environ.get("REDIS_HOST", "localhost")
+            redis_port = int(os.environ.get("REDIS_PORT", 6379))
+            redis_password = os.environ.get("REDIS_PASSWORD", "difyai123456")
+            self.redis_client = redis.Redis(
+                host=redis_host,
+                port=redis_port,
+                password=redis_password,
+                decode_responses=True,
+                socket_timeout=2.0
+            )
+            self.redis_client.ping()
+            self.redis_enabled = True
+            logging.info("sync_docs.py connected to Redis successfully for queuing.")
+        except Exception as e:
+            if redis_host == "redis":
+                logging.warning(f"sync_docs.py failed to connect to Redis host 'redis': {e}. Retrying with 'localhost'...")
+                try:
+                    redis_host = "localhost"
+                    self.redis_client = redis.Redis(
+                        host=redis_host,
+                        port=redis_port,
+                        password=redis_password,
+                        decode_responses=True,
+                        socket_timeout=2.0
+                    )
+                    self.redis_client.ping()
+                    self.redis_enabled = True
+                    logging.info("sync_docs.py connected to Redis successfully for queuing (fallback).")
+                except Exception as fallback_err:
+                    logging.error(f"sync_docs.py failed to connect to Redis on both 'redis' and 'localhost': {fallback_err}. Falling back to synchronous execution.")
+            else:
+                logging.error(f"sync_docs.py failed to connect to Redis: {e}. Falling back to synchronous execution.")
         for file_path, val in self.metadata.items():
             if isinstance(val, dict) and "hash" in val:
                 self.file_hashes[file_path] = val["hash"]
@@ -224,40 +265,78 @@ class DifySyncHandler(FileSystemEventHandler):
         except Exception as e:
             logging.error(f"Exception during deletion of {filename}: {e}")
 
+    def get_project_name(self, file_path):
+        abs_path = os.path.abspath(file_path)
+        try:
+            rel_path = os.path.relpath(abs_path, self.watch_dir)
+            parts = rel_path.split(os.sep)
+            if len(parts) > 1 and parts[0] != "..":
+                return parts[0]
+        except Exception as e:
+            logging.error(f"Error resolving project name for {file_path}: {e}")
+        return None
+
+    def enqueue_sync_job(self, project_name):
+        if not self.redis_enabled:
+            return False
+            
+        # 5秒のデバウンス（重複キューイング防止）
+        lock_key = f"ragy:queued_projects:{project_name}"
+        try:
+            if self.redis_client.set(lock_key, "1", ex=5, nx=True):
+                job_id = str(uuid.uuid4())
+                job = {
+                    "id": job_id,
+                    "type": "sync_docs",
+                    "payload": {
+                        "project_name": project_name
+                    },
+                    "created_at": int(time.time())
+                }
+                self.redis_client.rpush("ragy:jobs", json.dumps(job))
+                logging.info(f"Enqueued sync_docs job for project {project_name} (Job ID: {job_id})")
+                return True
+            else:
+                logging.debug(f"Sync job for project {project_name} is already queued. Skipping duplicate.")
+                return True
+        except Exception as e:
+            logging.error(f"Failed to enqueue job for project {project_name}: {e}")
+            return False
+
     def on_created(self, event):
         if not event.is_directory and event.src_path.endswith('.md'):
-            if not os.path.exists(event.src_path):
-                return
-            doc_id = self.get_doc_id(event.src_path)
-            if doc_id:
-                return
-            current_hash = self.get_file_hash(event.src_path)
-            if self.file_hashes.get(event.src_path) == current_hash:
-                return
-            logging.info(f"Detected file creation: {event.src_path}")
-            self.upload_file(event.src_path)
+            project_name = self.get_project_name(event.src_path)
+            if project_name:
+                logging.info(f"File created: {event.src_path}. Triggering async sync.")
+                if not self.enqueue_sync_job(project_name):
+                    # Redis接続がない場合は同期的にフォールバック実行
+                    doc_id = self.get_doc_id(event.src_path)
+                    if not doc_id:
+                        self.upload_file(event.src_path)
+            else:
+                logging.warning(f"Created file {event.src_path} does not belong to a registered project.")
 
     def on_modified(self, event):
         if not event.is_directory and event.src_path.endswith('.md'):
-            if not os.path.exists(event.src_path):
-                return
-            current_hash = self.get_file_hash(event.src_path)
-            saved_hash = self.get_saved_hash(event.src_path)
-            if saved_hash == current_hash:
-                return
-            logging.info(f"Detected file modification: {event.src_path}")
-            doc_id = self.get_doc_id(event.src_path)
-            if doc_id:
-                self.update_file(event.src_path, doc_id)
-            else:
-                self.upload_file(event.src_path)
+            project_name = self.get_project_name(event.src_path)
+            if project_name:
+                logging.info(f"File modified: {event.src_path}. Triggering async sync.")
+                if not self.enqueue_sync_job(project_name):
+                    doc_id = self.get_doc_id(event.src_path)
+                    if doc_id:
+                        self.update_file(event.src_path, doc_id)
+                    else:
+                        self.upload_file(event.src_path)
 
     def on_deleted(self, event):
         if not event.is_directory and event.src_path.endswith('.md'):
-            logging.info(f"Detected file deletion: {event.src_path}")
-            doc_id = self.get_doc_id(event.src_path)
-            if doc_id:
-                self.delete_file(event.src_path, doc_id)
+            project_name = self.get_project_name(event.src_path)
+            if project_name:
+                logging.info(f"File deleted: {event.src_path}. Triggering async sync.")
+                if not self.enqueue_sync_job(project_name):
+                    doc_id = self.get_doc_id(event.src_path)
+                    if doc_id:
+                        self.delete_file(event.src_path, doc_id)
 
     def sync_project_once(self, project_name):
         config = self.project_configs.get(project_name)

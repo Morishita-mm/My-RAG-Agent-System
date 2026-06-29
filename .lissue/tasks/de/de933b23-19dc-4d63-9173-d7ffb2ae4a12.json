@@ -1,0 +1,12 @@
+{
+  "local_id": 16,
+  "global_id": "de933b23-19dc-4d63-9173-d7ffb2ae4a12",
+  "title": "Redisによる非同期ジョブキューの実装",
+  "description": null,
+  "status": "Close",
+  "assignee": null,
+  "parent_global_id": null,
+  "linked_files": [],
+  "created_at": "2026-06-29T12:46:35.372439Z",
+  "updated_at": "2026-06-29T12:49:34.983885Z"
+}
