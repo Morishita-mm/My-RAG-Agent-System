@@ -1,0 +1,107 @@
+app:
+  description: "Agentic RAG workflow utilizing local LLM (Qwen) for query rewriting and reranking."
+  icon: "🤖"
+  icon_background: "#FFEAD2"
+  mode: workflow
+  name: "Agentic RAG"
+workflow:
+  features:
+    file_upload:
+      image:
+        enabled: false
+        number_limits: 3
+        transfer_methods:
+        - remote_url
+        - local_file
+    opening_statement: ''
+    retriever_resource:
+      enabled: true
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    text_to_speech:
+      enabled: false
+  nodes:
+  - data:
+      desc: 'ワークフローの入力クエリ'
+      selected: false
+      title: "開始"
+      type: start
+      variables:
+      - label: "query"
+        max_length: 256
+        options: []
+        required: true
+        type: paragraph
+        variable: query
+    id: "start"
+    position:
+      x: 80
+      y: 200
+    type: start
+  - data:
+      context:
+        enabled: false
+        variable_selector: []
+      desc: 'ローカルモデルを用いたクエリの再生成'
+      model:
+        completion_params:
+          temperature: 0.1
+        mode: chat
+        name: qwen2.5-coder
+        provider: ollama
+      prompt_template:
+      - role: system
+        text: "ユーザーの質問から、ベクトルデータベースでの検索（RAG）に最も適した日本語の検索クエリ（同義語や技術用語を補完したもの）を1つだけ再生成してください。余計な説明や挨拶は一切含めず、クエリ文字列のみを出力してください。"
+      - role: user
+        text: "{{#start.query#}}"
+      selected: false
+      title: "クエリ再生成"
+      type: llm
+      variables: []
+    id: "query_rewriter"
+    position:
+      x: 280
+      y: 200
+    type: llm
+  - data:
+      dataset_ids: []
+      desc: 'RAGデータセットからの検索とリランク'
+      multiple_retrieval_config:
+        reranking_model:
+          name: ''
+          provider: ''
+        reranking_mode: model
+        reranking_enable: true
+        top_k: 5
+      query_variable_selector:
+      - "query_rewriter"
+      - "text"
+      selected: false
+      title: "ナレッジ取得"
+      type: dataset-retrieval
+    id: "dataset_retrieval"
+    position:
+      x: 480
+      y: 200
+    type: dataset-retrieval
+  - data:
+      desc: '検索結果の返却'
+      outputs:
+      - value_selector:
+        - "dataset_retrieval"
+        - "result"
+        variable: result
+      selected: false
+      title: "終了"
+      type: end
+    id: "end"
+    position:
+      x: 680
+      y: 200
+    type: end
+  viewport:
+    x: 0
+    y: 0
+    zoom: 1

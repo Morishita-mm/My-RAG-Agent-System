@@ -201,15 +201,72 @@ def search_dify_knowledge(query: str) -> str:
         return f"Error: No Dify Dataset configuration found. (Current project: {current_proj})"
 
     api_base = config.get("api_base", "").rstrip('/')
-    api_key = config.get("api_key")
+    dataset_api_key = config.get("api_key")  # 従来のデータセットAPIキー
+    workflow_api_key = config.get("workflow_api_key") or os.environ.get("DIFY_RAG_WORKFLOW_API_KEY")
     dataset_id = config.get("dataset_id")
 
-    if not api_key or not dataset_id:
+    # 2.1 ワークフローAPIが利用可能な場合は Agentic RAG を優先実行
+    if workflow_api_key:
+        logging.info(f"Initiating Agentic RAG search via Dify Workflow for project '{current_proj}'...")
+        workflow_url = f"{api_base}/workflows/run"
+        workflow_headers = {
+            "Authorization": f"Bearer {workflow_api_key}",
+            "Content-Type": "application/json"
+        }
+        workflow_payload = {
+            "inputs": {
+                "query": query
+            },
+            "response_mode": "blocking",
+            "user": "mcp-agent"
+        }
+        
+        try:
+            response = requests.post(workflow_url, headers=workflow_headers, json=workflow_payload, timeout=20)
+            if response.status_code == 200:
+                res_data = response.json()
+                outputs = res_data.get("data", {}).get("outputs", {})
+                # DSL定義で outputs.result にナレッジ取得結果が入る
+                records = outputs.get("result", [])
+                
+                # もし outputs.result が文字列（LLM要約等）や空だった場合、リストでない場合も考慮してパース
+                if isinstance(records, list) and records:
+                    results = []
+                    for record in records:
+                        if isinstance(record, dict):
+                            content = record.get("content", "")
+                            score = record.get("score", 0.0)
+                            results.append(f"Content (Score: {score}):\n{content}\n")
+                        else:
+                            results.append(str(record))
+                    
+                    final_result = f"[Project: {current_proj or 'default'} (Agentic RAG)] Search Results:\n" + "\n".join(results)
+                    
+                    # キャッシュの保存
+                    if redis_enabled and query_vector:
+                        save_semantic_cache(current_proj, query, query_vector, final_result)
+                        
+                    return final_result
+                elif isinstance(records, str) and records:
+                    # テキストとして直接結果が返るパターン
+                    final_result = f"[Project: {current_proj or 'default'} (Agentic RAG)] Search Results:\n{records}"
+                    if redis_enabled and query_vector:
+                        save_semantic_cache(current_proj, query, query_vector, final_result)
+                    return final_result
+                else:
+                    logging.warning("Dify Workflow completed but returned empty result list. Falling back to Dataset retrieval...")
+            else:
+                logging.error(f"Dify Workflow API responded with {response.status_code}: {response.text}. Falling back...")
+        except Exception as e:
+            logging.error(f"Exception during Dify Workflow search: {e}. Falling back...")
+
+    # 2.2 フォールバック: 従来のデータセット retrieve API による検索
+    if not dataset_api_key or not dataset_id:
         return f"Error: DIFY_DATASET_API_KEY or DIFY_DATASET_ID not configured for project '{current_proj}'."
 
     url = f"{api_base}/datasets/{dataset_id}/retrieve"
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        "Authorization": f"Bearer {dataset_api_key}",
         "Content-Type": "application/json"
     }
     payload = {

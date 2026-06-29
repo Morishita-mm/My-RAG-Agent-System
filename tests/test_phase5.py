@@ -125,6 +125,10 @@ class TestPhase5Scripts(unittest.TestCase):
         """Test search_dify_knowledge dynamically switches dataset based on continue config"""
         mock_check_cache.return_value = None
         
+        # redis_enabled の環境依存を排除し、決定論的に Embedding 生成をテスト
+        real_redis_enabled = mcp_server.redis_enabled
+        mcp_server.redis_enabled = True
+        
         def mock_post_side_effect(url, *args, **kwargs):
             res = MagicMock()
             res.status_code = 200
@@ -136,7 +140,7 @@ class TestPhase5Scripts(unittest.TestCase):
                 }
             return res
         mock_post.side_effect = mock_post_side_effect
-
+ 
         # mock docs/sync_config.json mappings
         sync_config_data = {
             "projects": {
@@ -154,7 +158,7 @@ class TestPhase5Scripts(unittest.TestCase):
             shutil.copy2(real_sync_config, backup_sync_config)
         with open(real_sync_config, 'w', encoding='utf-8') as f:
             json.dump(sync_config_data, f)
-
+ 
         # Create active project configuration .continue/config.json
         continue_dir = "./.continue"
         if not os.path.exists(continue_dir):
@@ -167,7 +171,7 @@ class TestPhase5Scripts(unittest.TestCase):
         }
         with open(continue_file, 'w', encoding='utf-8') as f:
             json.dump(continue_data, f)
-
+ 
         try:
             result = search_dify_knowledge("test-query")
             self.assertIn("Matched in project x.", result)
@@ -182,6 +186,7 @@ class TestPhase5Scripts(unittest.TestCase):
             self.assertEqual(dify_call[0][0], "http://mock-dify-api/x/v1/datasets/dataset-id-x/retrieve")
             self.assertEqual(dify_call[1]["headers"]["Authorization"], "Bearer api-key-x")
         finally:
+            mcp_server.redis_enabled = real_redis_enabled
             if os.path.exists(continue_file):
                 os.remove(continue_file)
             if os.path.exists(continue_dir):

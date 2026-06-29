@@ -38,15 +38,62 @@ def search_dify_knowledge(query):
         sys.exit(1)
 
     api_base = config.get("api_base", "").rstrip("/")
-    api_key = config.get("api_key")
+    dataset_api_key = config.get("api_key")
+    workflow_api_key = config.get("workflow_api_key") or os.environ.get("DIFY_RAG_WORKFLOW_API_KEY")
     dataset_id = config.get("dataset_id")
 
-    if not api_key or not dataset_id:
+    # 1. ワークフローAPIが利用可能な場合は優先実行 (Agentic RAG)
+    if workflow_api_key:
+        url = f"{api_base}/workflows/run"
+        headers = {
+            "Authorization": f"Bearer {workflow_api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "inputs": {
+                "query": query
+            },
+            "response_mode": "blocking",
+            "user": "mcp-agent"
+        }
+        
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=20)
+            if response.status_code == 200:
+                res_data = response.json()
+                outputs = res_data.get("data", {}).get("outputs", {})
+                records = outputs.get("result", [])
+                
+                if isinstance(records, list) and records:
+                    print(f"=== Knowledge search results for [Project: {project_id}] (Agentic RAG) ===")
+                    for idx, rec in enumerate(records, 1):
+                        if isinstance(rec, dict):
+                            score = rec.get("score", 0.0)
+                            content = rec.get("content", "")
+                            print(f"\n[{idx}] Score: {score:.4f}")
+                            print("-" * 50)
+                            print(content.strip())
+                            print("-" * 50)
+                        else:
+                            print(f"\n[{idx}] Output:")
+                            print(str(rec))
+                    return
+                elif isinstance(records, str) and records:
+                    print(f"=== Knowledge search results for [Project: {project_id}] (Agentic RAG) ===")
+                    print(records)
+                    return
+            else:
+                print(f"Warning: Dify Workflow API responded with {response.status_code}. Falling back to retrieve API...")
+        except Exception as e:
+            print(f"Warning: Exception during Dify Workflow search ({e}). Falling back to retrieve API...")
+
+    # 2. 従来のデータセットAPIへのフォールバック
+    if not dataset_api_key or not dataset_id:
         print(f"Error: Missing api_key or dataset_id for project '{project_id}'")
         sys.exit(1)
 
     url = f"{api_base}/datasets/{dataset_id}/retrieve"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {dataset_api_key}", "Content-Type": "application/json"}
     payload = {
         "query": query,
         "retrieval_model": {
