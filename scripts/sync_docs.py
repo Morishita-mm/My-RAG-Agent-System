@@ -25,10 +25,14 @@ class DifySyncHandler(FileSystemEventHandler):
         self.project_configs = self.load_project_configs()
         self.metadata = self.load_metadata()
         self.file_hashes = {}
+        self.file_hashes = {}
         for file_path, val in self.metadata.items():
             if isinstance(val, dict) and "hash" in val:
                 self.file_hashes[file_path] = val["hash"]
                 
+        # サポートする拡張子定義
+        self.supported_extensions = ('.md', '.pdf', '.docx', '.xlsx', '.xls')
+        
         # Redis接続初期化
         self.redis_enabled = False
         try:
@@ -140,6 +144,17 @@ class DifySyncHandler(FileSystemEventHandler):
         except Exception as e:
             logging.error(f"Failed to save metadata file: {e}")
 
+    def is_target_file(self, file_path):
+        return file_path.lower().endswith(self.supported_extensions) and not ".parsed_cache" in file_path
+
+    def get_parsed_cache_path(self, file_path):
+        abs_path = os.path.abspath(file_path)
+        rel_path = os.path.relpath(abs_path, self.watch_dir)
+        cache_root = os.path.join(self.watch_dir, ".parsed_cache")
+        cache_path = os.path.join(cache_root, rel_path + ".md")
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        return cache_path
+
     def get_file_hash(self, file_path):
         if not os.path.exists(file_path):
             return None
@@ -163,7 +178,19 @@ class DifySyncHandler(FileSystemEventHandler):
         api_key = config.get("api_key")
         dataset_id = config.get("dataset_id")
 
-        filename = os.path.basename(file_path)
+        ext = os.path.splitext(file_path)[1].lower()
+        actual_upload_path = file_path
+        
+        if ext != '.md':
+            logging.info(f"Converting non-markdown file {file_path} to Markdown...")
+            from document_parser import convert_document_to_markdown
+            markdown_str = convert_document_to_markdown(file_path)
+            cache_path = self.get_parsed_cache_path(file_path)
+            with open(cache_path, 'w', encoding='utf-8') as f_cache:
+                f_cache.write(markdown_str)
+            actual_upload_path = cache_path
+
+        filename = os.path.basename(actual_upload_path)
         url = f"{api_base}/datasets/{dataset_id}/document/create_by_file"
         headers = {"Authorization": f"Bearer {api_key}"}
         data = {
@@ -175,7 +202,7 @@ class DifySyncHandler(FileSystemEventHandler):
             })
         }
         try:
-            with open(file_path, 'rb') as f:
+            with open(actual_upload_path, 'rb') as f:
                 files = {'file': (filename, f, 'text/plain')}
                 response = requests.post(url, headers=headers, data=data, files=files, timeout=15)
             
@@ -190,7 +217,7 @@ class DifySyncHandler(FileSystemEventHandler):
                     }
                     self.save_metadata()
                     self.file_hashes[file_path] = current_hash
-                    logging.info(f"Successfully uploaded: {filename} to dataset {dataset_id} (ID: {doc_id})")
+                    logging.info(f"Successfully uploaded: {filename} (source: {os.path.basename(file_path)}) to dataset {dataset_id} (ID: {doc_id})")
                 else:
                     logging.warning(f"Uploaded {filename} but no document ID returned: {res_data}")
             else:
@@ -208,7 +235,19 @@ class DifySyncHandler(FileSystemEventHandler):
         api_key = config.get("api_key")
         dataset_id = config.get("dataset_id")
 
-        filename = os.path.basename(file_path)
+        ext = os.path.splitext(file_path)[1].lower()
+        actual_upload_path = file_path
+        
+        if ext != '.md':
+            logging.info(f"Re-converting modified non-markdown file {file_path} to Markdown...")
+            from document_parser import convert_document_to_markdown
+            markdown_str = convert_document_to_markdown(file_path)
+            cache_path = self.get_parsed_cache_path(file_path)
+            with open(cache_path, 'w', encoding='utf-8') as f_cache:
+                f_cache.write(markdown_str)
+            actual_upload_path = cache_path
+
+        filename = os.path.basename(actual_upload_path)
         url = f"{api_base}/datasets/{dataset_id}/documents/{doc_id}/update_by_file"
         headers = {"Authorization": f"Bearer {api_key}"}
         data = {
@@ -220,7 +259,7 @@ class DifySyncHandler(FileSystemEventHandler):
             })
         }
         try:
-            with open(file_path, 'rb') as f:
+            with open(actual_upload_path, 'rb') as f:
                 files = {'file': (filename, f, 'text/plain')}
                 response = requests.post(url, headers=headers, data=data, files=files, timeout=15)
             
@@ -232,7 +271,7 @@ class DifySyncHandler(FileSystemEventHandler):
                 }
                 self.save_metadata()
                 self.file_hashes[file_path] = current_hash
-                logging.info(f"Successfully updated: {filename} in dataset {dataset_id} (ID: {doc_id})")
+                logging.info(f"Successfully updated: {filename} (source: {os.path.basename(file_path)}) in dataset {dataset_id} (ID: {doc_id})")
             else:
                 logging.error(f"Failed to update {filename} in dataset {dataset_id}: {response.status_code} - {response.text}")
         except Exception as e:
@@ -259,6 +298,17 @@ class DifySyncHandler(FileSystemEventHandler):
                     self.save_metadata()
                 if file_path in self.file_hashes:
                     del self.file_hashes[file_path]
+                
+                # キャッシュが存在する場合はキャッシュファイルも削除
+                ext = os.path.splitext(file_path)[1].lower()
+                if ext != '.md':
+                    cache_path = self.get_parsed_cache_path(file_path)
+                    if os.path.exists(cache_path):
+                        try:
+                            os.remove(cache_path)
+                        except OSError as oe:
+                            logging.warning(f"Failed to delete cache file {cache_path}: {oe}")
+                            
                 logging.info(f"Successfully deleted from Dify: {filename} from dataset {dataset_id}")
             else:
                 logging.error(f"Failed to delete {filename} from dataset {dataset_id}: {response.status_code} - {response.text}")
@@ -304,7 +354,7 @@ class DifySyncHandler(FileSystemEventHandler):
             return False
 
     def on_created(self, event):
-        if not event.is_directory and event.src_path.endswith('.md'):
+        if not event.is_directory and self.is_target_file(event.src_path):
             project_name = self.get_project_name(event.src_path)
             if project_name:
                 logging.info(f"File created: {event.src_path}. Triggering async sync.")
@@ -317,7 +367,7 @@ class DifySyncHandler(FileSystemEventHandler):
                 logging.warning(f"Created file {event.src_path} does not belong to a registered project.")
 
     def on_modified(self, event):
-        if not event.is_directory and event.src_path.endswith('.md'):
+        if not event.is_directory and self.is_target_file(event.src_path):
             project_name = self.get_project_name(event.src_path)
             if project_name:
                 logging.info(f"File modified: {event.src_path}. Triggering async sync.")
@@ -329,7 +379,7 @@ class DifySyncHandler(FileSystemEventHandler):
                         self.upload_file(event.src_path)
 
     def on_deleted(self, event):
-        if not event.is_directory and event.src_path.endswith('.md'):
+        if not event.is_directory and self.is_target_file(event.src_path):
             project_name = self.get_project_name(event.src_path)
             if project_name:
                 logging.info(f"File deleted: {event.src_path}. Triggering async sync.")
@@ -352,10 +402,14 @@ class DifySyncHandler(FileSystemEventHandler):
         logging.info(f"Starting one-shot sync for project: {project_name} in {project_dir}")
 
         local_files = []
-        for root, _, files in os.walk(project_dir):
+        for root, dirs, files in os.walk(project_dir):
+            # 中間キャッシュディレクトリは無視する
+            if ".parsed_cache" in dirs:
+                dirs.remove(".parsed_cache")
             for file in files:
-                if file.endswith('.md'):
-                    local_files.append(os.path.abspath(os.path.join(root, file)))
+                file_path = os.path.join(root, file)
+                if self.is_target_file(file_path):
+                    local_files.append(os.path.abspath(file_path))
 
         meta_project_files = []
         for file_path in list(self.metadata.keys()):
