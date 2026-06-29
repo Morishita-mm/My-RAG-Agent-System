@@ -7,8 +7,9 @@ import time
 import json
 import sys
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../scripts')))
 from sync_docs import DifySyncHandler
+import mcp_server
 from mcp_server import search_dify_knowledge
 
 class TestPhase5Scripts(unittest.TestCase):
@@ -88,8 +89,8 @@ class TestPhase5Scripts(unittest.TestCase):
         self.assertEqual(args_y[0], "http://mock-dify-api/y/v1/datasets/dataset-id-y/document/create_by_file")
         self.assertEqual(kwargs_y["headers"]["Authorization"], "Bearer api-key-y")
 
-        self.assertEqual(handler.metadata.get(test_file_x), "doc_12345")
-        self.assertEqual(handler.metadata.get(test_file_y), "doc_12345")
+        self.assertEqual(handler.get_doc_id(test_file_x), "doc_12345")
+        self.assertEqual(handler.get_doc_id(test_file_y), "doc_12345")
 
     def test_mcp_server_tool_missing_env(self):
         """Test search_dify_knowledge missing environment variables"""
@@ -119,14 +120,22 @@ class TestPhase5Scripts(unittest.TestCase):
             self.assertIn("0.95", result)
 
     @patch('requests.post')
-    def test_mcp_server_tool_dynamic_project(self, mock_post):
+    @patch('mcp_server.check_semantic_cache')
+    def test_mcp_server_tool_dynamic_project(self, mock_check_cache, mock_post):
         """Test search_dify_knowledge dynamically switches dataset based on continue config"""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "records": [{"segment": {"content": "Matched in project x."}, "score": 0.88}]
-        }
-        mock_post.return_value = mock_response
+        mock_check_cache.return_value = None
+        
+        def mock_post_side_effect(url, *args, **kwargs):
+            res = MagicMock()
+            res.status_code = 200
+            if "embeddings" in url:
+                res.json.return_value = {"data": [{"embedding": [0.1] * 1024}]}
+            else:
+                res.json.return_value = {
+                    "records": [{"segment": {"content": "Matched in project x."}, "score": 0.88}]
+                }
+            return res
+        mock_post.side_effect = mock_post_side_effect
 
         # mock docs/sync_config.json mappings
         sync_config_data = {
@@ -164,10 +173,14 @@ class TestPhase5Scripts(unittest.TestCase):
             self.assertIn("Matched in project x.", result)
             self.assertIn("[Project: project_x]", result)
             
-            mock_post.assert_called_once()
-            args, kwargs = mock_post.call_args
-            self.assertEqual(args[0], "http://mock-dify-api/x/v1/datasets/dataset-id-x/retrieve")
-            self.assertEqual(kwargs["headers"]["Authorization"], "Bearer api-key-x")
+            self.assertEqual(mock_post.call_count, 2)
+            # embeddings と retrieve の2つの呼び出しがそれぞれ行われたことを確認
+            calls = mock_post.call_args_list
+            embedding_call = calls[0]
+            dify_call = calls[1]
+            self.assertIn("embeddings", embedding_call[0][0])
+            self.assertEqual(dify_call[0][0], "http://mock-dify-api/x/v1/datasets/dataset-id-x/retrieve")
+            self.assertEqual(dify_call[1]["headers"]["Authorization"], "Bearer api-key-x")
         finally:
             if os.path.exists(continue_file):
                 os.remove(continue_file)
@@ -199,7 +212,7 @@ class TestPhase5Scripts(unittest.TestCase):
         with open(large_log, 'wb') as f:
             f.write(b"x" * (11 * 1024 * 1024))
 
-        script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../log_cleanup.sh'))
+        script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../scripts/log_cleanup.sh'))
         
         result = subprocess.run([script_path, test_log_dir], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0)

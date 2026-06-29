@@ -168,7 +168,7 @@ def save_semantic_cache(project_name: str, query: str, query_vector: list, resul
     }
     
     try:
-        redis_client.setex(key, ttl, json.dumps(data, ensure_ascii=False))
+        redis_client.set(key, json.dumps(data, ensure_ascii=False), ex=ttl)
         logging.info(f"[Semantic Cache Save] Saved key: {key}")
     except Exception as e:
         logging.error(f"Failed to save semantic cache: {e}")
