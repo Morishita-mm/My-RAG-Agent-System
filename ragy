@@ -306,7 +306,13 @@ show_status() {
 init_project() {
   local dataset_id=$1
   local target_dir=$(pwd)
-  local project_name=$(basename "$target_dir")
+  local project_name
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    project_name=$(basename "$(git rev-parse --show-toplevel)")
+  else
+    project_name=$(basename "$target_dir")
+  fi
+
   local rag_docs_dir="$PROJECT_DIR/docs/$project_name"
   local config_file="$PROJECT_DIR/docs/sync_config.json"
 
@@ -332,7 +338,6 @@ init_project() {
   if [ -z "$dataset_id" ]; then
     echo "Dataset ID not provided. Creating a new dataset '$project_name' in Dify..."
 
-    # 事前に Dify API に疎通できるか簡易チェック
     if ! curl -s --connect-timeout 3 "$api_base/datasets" -H "Authorization: Bearer $api_key" >/dev/null; then
       echo "Error: Cannot connect to Dify API. Please verify that RAG services are running ('ragy start')."
       exit 1
@@ -361,13 +366,15 @@ init_project() {
     echo "Created physical directory: $rag_docs_dir"
   fi
 
-  # 3. カレントディレクトリへのシンボリックリンク作成 (リンク切れリンクも安全に回避)
   if [ ! -e "$target_dir/docs" ] && [ ! -L "$target_dir/docs" ]; then
     ln -s "$rag_docs_dir" "$target_dir/docs"
     echo "Created symbolic link './docs' pointing to RAG system."
   else
     echo "Warning: './docs' (or a broken link) already exists in the current directory. Skipping link creation."
   fi
+
+  echo "$project_name" >.rag-project
+  echo "Created .rag-project for integration."
 
   # 4. sync_config.json の自動更新
   if [ ! -f "$config_file" ]; then
@@ -382,42 +389,35 @@ init_project() {
     "$config_file" >"${config_file}.tmp" && mv "${config_file}.tmp" "$config_file"
 
   echo "Successfully registered $project_name to sync_config.json."
-  echo "Initialization complete! You can now put markdown files into ./docs"
 
+  # 5. テンプレート展開処理（既存ロジック温存）
   local template_dir="$PROJECT_DIR/templates"
-
-  # プレースホルダに埋め込む変数を定義
   export MODEL_NAME="openai/gemini-3.5-flash"
   export API_BASE="http://localhost:4000/v1"
   export API_KEY="sk-1234"
 
-  # テンプレート適用関数（envsubst がない場合は sed を使う）
   apply_template() {
     local src=$1
     local dst=$2
     if command -v envsubst >/dev/null 2>&1; then
       envsubst <"$src" >"$dst"
     else
-      # sed を使ってプレースホルダを安全に置換
-      sed -e "s|\${MODEL_NAME}|$MODEL_NAME|g" \
-        -e "s|\${API_BASE}|$API_BASE|g" \
-        -e "s|\${API_KEY}|$API_KEY|g" \
-        "$src" >"$dst"
+      sed -e "s|\${MODEL_NAME}|$MODEL_NAME|g" -e "s|\${API_BASE}|$API_BASE|g" -e "s|\${API_KEY}|$API_KEY|g" "$src" >"$dst"
     fi
   }
 
-  # Aider設定の展開
   if [ ! -f ".aider.conf.yml" ]; then
     apply_template "$template_dir/aider.conf.yml" ".aider.conf.yml"
     echo "Created .aider.conf.yml"
   fi
 
-  # Continue設定の展開
   mkdir -p .continue
   if [ ! -f ".continue/config.json" ]; then
     apply_template "$template_dir/continue_config.json" ".continue/config.json"
     echo "Created .continue/config.json"
   fi
+
+  echo "Initialization complete!"
 }
 
 sync_project() {
