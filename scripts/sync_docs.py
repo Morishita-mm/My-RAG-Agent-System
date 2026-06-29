@@ -25,7 +25,6 @@ class DifySyncHandler(FileSystemEventHandler):
         self.project_configs = self.load_project_configs()
         self.metadata = self.load_metadata()
         self.file_hashes = {}
-        self.file_hashes = {}
         for file_path, val in self.metadata.items():
             if isinstance(val, dict) and "hash" in val:
                 self.file_hashes[file_path] = val["hash"]
@@ -35,6 +34,8 @@ class DifySyncHandler(FileSystemEventHandler):
         
         # Redis接続初期化
         self.redis_enabled = False
+        self.queue_name = "ragy:jobs"
+        self.lock_key_prefix = "ragy:queued_projects"
         try:
             redis_host = os.environ.get("REDIS_HOST", "localhost")
             redis_port = int(os.environ.get("REDIS_PORT", 6379))
@@ -68,9 +69,6 @@ class DifySyncHandler(FileSystemEventHandler):
                     logging.error(f"sync_docs.py failed to connect to Redis on both 'redis' and 'localhost': {fallback_err}. Falling back to synchronous execution.")
             else:
                 logging.error(f"sync_docs.py failed to connect to Redis: {e}. Falling back to synchronous execution.")
-        for file_path, val in self.metadata.items():
-            if isinstance(val, dict) and "hash" in val:
-                self.file_hashes[file_path] = val["hash"]
 
     def get_doc_id(self, file_path):
         val = self.metadata.get(file_path)
@@ -331,7 +329,7 @@ class DifySyncHandler(FileSystemEventHandler):
             return False
             
         # 5秒のデバウンス（重複キューイング防止）
-        lock_key = f"ragy:queued_projects:{project_name}"
+        lock_key = f"{self.lock_key_prefix}:{project_name}"
         try:
             if self.redis_client.set(lock_key, "1", ex=5, nx=True):
                 job_id = str(uuid.uuid4())
@@ -343,7 +341,7 @@ class DifySyncHandler(FileSystemEventHandler):
                     },
                     "created_at": int(time.time())
                 }
-                self.redis_client.rpush("ragy:jobs", json.dumps(job))
+                self.redis_client.rpush(self.queue_name, json.dumps(job))
                 logging.info(f"Enqueued sync_docs job for project {project_name} (Job ID: {job_id})")
                 return True
             else:

@@ -94,6 +94,9 @@ LITELLM_KEY = os.environ.get("LITELLM_KEY", "sk-1234")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "multilingual-e5-large")
 
 def get_query_embedding(query: str) -> list:
+    if not query or not str(query).strip():
+        logging.warning("Empty or whitespace-only query passed to get_query_embedding. Returning empty list.")
+        return []
     url = f"{LITELLM_BASE}/v1/embeddings"
     headers = {
         "Authorization": f"Bearer {LITELLM_KEY}",

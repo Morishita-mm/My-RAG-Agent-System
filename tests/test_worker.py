@@ -106,6 +106,15 @@ class TestQueueWorker(unittest.TestCase):
             
         from sync_docs import DifySyncHandler
         
+        # テスト専用のキューとロックキーに分離し、並行ワーカーとの競合を防ぐ
+        test_queue = "ragy:jobs:test"
+        test_lock_prefix = "ragy:queued_projects:test"
+        
+        self.redis_client.delete(test_queue)
+        keys = self.redis_client.keys(f"{test_lock_prefix}:*")
+        if keys:
+            self.redis_client.delete(*keys)
+            
         # ダミーのハンドラ作成
         handler = DifySyncHandler(
             watch_dir="./docs",
@@ -113,6 +122,11 @@ class TestQueueWorker(unittest.TestCase):
             api_key="mock-key",
             dataset_id="dataset-123"
         )
+        
+        # テスト用の宛先に上書き
+        handler.queue_name = test_queue
+        handler.lock_key_prefix = test_lock_prefix
+        
         # Redis接続が確実に有効であることを確認
         self.assertTrue(handler.redis_enabled)
         
@@ -121,12 +135,18 @@ class TestQueueWorker(unittest.TestCase):
         self.assertTrue(success)
         
         # キューからジョブを取得して検証
-        job_json = self.redis_client.lpop(self.queue_name)
+        job_json = self.redis_client.lpop(test_queue)
         self.assertIsNotNone(job_json)
         
         job_data = json.loads(job_json)
         self.assertEqual(job_data["type"], "sync_docs")
         self.assertEqual(job_data["payload"]["project_name"], "test_project_x")
+        
+        # 後片付け
+        self.redis_client.delete(test_queue)
+        keys = self.redis_client.keys(f"{test_lock_prefix}:*")
+        if keys:
+            self.redis_client.delete(*keys)
 
 if __name__ == '__main__':
     unittest.main()
