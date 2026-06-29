@@ -88,21 +88,33 @@ def cosine_similarity(v1, v2):
         return 0.0
     return dot_product / (norm_a * norm_b)
 
-# Ollamaを利用したクエリのベクトル化
+# LiteLLM Proxy経由でクエリをベクトル化（共通モデルプール統一）
+LITELLM_BASE = os.environ.get("LITELLM_BASE", "http://localhost:4000")
+LITELLM_KEY = os.environ.get("LITELLM_KEY", "sk-1234")
+EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "multilingual-e5-large")
+
 def get_query_embedding(query: str) -> list:
-    url = "http://localhost:11434/api/embeddings"
+    url = f"{LITELLM_BASE}/v1/embeddings"
+    headers = {
+        "Authorization": f"Bearer {LITELLM_KEY}",
+        "Content-Type": "application/json"
+    }
     payload = {
-        "model": "jeffh/intfloat-multilingual-e5-large:q8_0",
-        "prompt": query
+        "model": EMBEDDING_MODEL,
+        "input": query
     }
     try:
-        response = requests.post(url, json=payload, timeout=5)
+        response = requests.post(url, headers=headers, json=payload, timeout=5)
         if response.status_code == 200:
-            return response.json().get("embedding", [])
+            data = response.json()
+            embeddings = data.get("data", [])
+            if embeddings:
+                return embeddings[0].get("embedding", [])
+            return []
         else:
-            logging.error(f"Ollama embeddings API returned status {response.status_code}: {response.text}")
+            logging.error(f"LiteLLM embeddings API returned status {response.status_code}: {response.text}")
     except Exception as e:
-        logging.error(f"Failed to get embeddings from Ollama: {e}")
+        logging.error(f"Failed to get embeddings from LiteLLM: {e}")
     return []
 
 # セマンティックキャッシュの照会
