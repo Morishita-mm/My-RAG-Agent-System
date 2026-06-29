@@ -71,8 +71,14 @@ except Exception as e:
         logging.critical(f"Worker failed to connect to Redis: {e}")
         sys.exit(1)
 
+from concurrent.futures import ThreadPoolExecutor
+
+# 最大並列数 (過負荷防止のためデフォルト2)
+RAG_MAX_WORKERS = int(os.environ.get("RAG_MAX_WORKERS", 2))
+executor = ThreadPoolExecutor(max_workers=RAG_MAX_WORKERS)
+
 def run_sync_docs(project_name):
-    logging.info(f"Starting async sync_docs job for project: {project_name}")
+    logging.info(f"Starting sync_docs job for project: {project_name}")
     watch_dir = os.environ.get("DIFY_SYNC_DIR", "./docs")
     api_base = os.environ.get("DIFY_API_BASE", "http://localhost:8080/v1")
     api_key = os.environ.get("DIFY_DATASET_API_KEY")
@@ -90,7 +96,7 @@ def run_sync_docs(project_name):
         logging.error(f"Error during sync_docs job for project {project_name}: {e}")
 
 async def run_healer(file_path, error_log):
-    logging.info(f"Starting async healer job for file: {file_path}")
+    logging.info(f"Starting healer job for file: {file_path}")
     try:
         success = await heal_code(file_path, error_log)
         if success:
@@ -100,38 +106,55 @@ async def run_healer(file_path, error_log):
     except Exception as e:
         logging.error(f"Error during healer job for {file_path}: {e}")
 
-async def process_job(job_data):
+def run_healer_sync(file_path, error_log):
+    # 非同期関数を同期的にスレッド内で実行する
+    try:
+        asyncio.run(run_healer(file_path, error_log))
+    except Exception as e:
+        logging.error(f"Failed to run healer inside thread: {e}")
+
+def execute_job_in_thread(job_data):
+    """ThreadPoolExecutor 上で実行される同期処理ラッパー"""
     job_type = job_data.get("type")
     payload = job_data.get("payload", {})
     job_id = job_data.get("id", "unknown")
     
-    logging.info(f"Processing job {job_id} [Type: {job_type}]")
+    logging.info(f"[Job Start] ID: {job_id} | Type: {job_type}")
     
-    if job_type == "sync_docs":
-        project_name = payload.get("project_name")
-        if project_name:
-            # 同期処理はブロッキングIOのため、executor等を利用して非同期イベントループを妨げないように実行
-            await asyncio.to_thread(run_sync_docs, project_name)
+    try:
+        if job_type == "sync_docs":
+            project_name = payload.get("project_name")
+            if project_name:
+                run_sync_docs(project_name)
+            else:
+                logging.error(f"Invalid payload for sync_docs job {job_id}: missing project_name")
+                
+        elif job_type == "run_healer":
+            file_path = payload.get("file_path")
+            error_log = payload.get("error_log")
+            if file_path and error_log:
+                run_healer_sync(file_path, error_log)
+            else:
+                logging.error(f"Invalid payload for run_healer job {job_id}: missing file_path or error_log")
         else:
-            logging.error(f"Invalid payload for sync_docs job {job_id}: missing project_name")
-            
-    elif job_type == "run_healer":
-        file_path = payload.get("file_path")
-        error_log = payload.get("error_log")
-        if file_path and error_log:
-            await run_healer(file_path, error_log)
-        else:
-            logging.error(f"Invalid payload for run_healer job {job_id}: missing file_path or error_log")
-            
-    else:
-        logging.error(f"Unknown job type: {job_type}")
+            logging.error(f"Unknown job type: {job_type}")
+    except Exception as e:
+        logging.error(f"Exception raised in worker thread for job {job_id}: {e}")
+    finally:
+        logging.info(f"[Job Finished] ID: {job_id} | Type: {job_type}")
+
+async def process_job(job_data):
+    """既存テスト互換性のための非同期エントリーポイント。
+    ThreadPoolExecutor上へタスクを委譲して待機します。"""
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(executor, execute_job_in_thread, job_data)
 
 async def worker_loop():
-    logging.info("Starting worker loop waiting for jobs...")
+    logging.info(f"Starting worker loop (Parallel mode, max_workers={RAG_MAX_WORKERS}). Waiting for jobs...")
+    
     while True:
         try:
-            # blpop はブロッキング処理なので、非同期に実行するため to_thread を利用
-            # タイムアウトを1秒にして定期的にイベントループに制御を戻す
+            # blpop はブロッキング処理なので、非同期イベントループを妨げないように to_thread で実行
             result = await asyncio.to_thread(
                 redis_client.blpop, QUEUE_NAME, timeout=1
             )
@@ -139,13 +162,15 @@ async def worker_loop():
                 _, job_json = result
                 try:
                     job_data = json.loads(job_json)
-                    await process_job(job_data)
+                    job_id = job_data.get("id", "unknown")
+                    logging.info(f"Received job {job_id}. Dispatching to ThreadPoolExecutor...")
+                    # バックグラウンドタスクとして非同期実行 (ノンブロッキングで次のジョブへ)
+                    asyncio.create_task(process_job(job_data))
                 except json.JSONDecodeError:
                     logging.error(f"Failed to parse job JSON: {job_json}")
                 except Exception as e:
-                    logging.error(f"Error processing job: {e}")
+                    logging.error(f"Error dispatching job: {e}")
             else:
-                # タイムアウト時は少しだけ待つ
                 await asyncio.sleep(0.1)
         except asyncio.CancelledError:
             logging.info("Worker loop cancelled. Exiting...")
@@ -163,6 +188,9 @@ def main():
     try:
         asyncio.run(worker_loop())
     finally:
+        # スレッドプールのシャットダウン
+        logging.info("Shutting down ThreadPoolExecutor...")
+        executor.shutdown(wait=True)
         if os.path.exists(pid_file):
             try:
                 os.remove(pid_file)

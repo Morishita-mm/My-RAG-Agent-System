@@ -1,0 +1,12 @@
+{
+  "local_id": 20,
+  "global_id": "9593e22d-cab8-4664-b766-1216e9e6c0e1",
+  "title": "並列処理ワーカーの実装と大容量ファイルベンチマークの測定",
+  "description": null,
+  "status": "InProgress",
+  "assignee": null,
+  "parent_global_id": null,
+  "linked_files": [],
+  "created_at": "2026-06-29T13:33:30.191332Z",
+  "updated_at": "2026-06-29T13:33:30.201071Z"
+}
