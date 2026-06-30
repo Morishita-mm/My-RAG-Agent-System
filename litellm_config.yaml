@@ -7,7 +7,7 @@ model_list:
 
   - model_name: qwen2.5-coder
     litellm_params:
-      model: ollama/qwen2.5-coder:3b
+      model: ollama/qwen2.5-coder:7b
       api_base: "http://host.docker.internal:11434"
 
   - model_name: multilingual-e5-large

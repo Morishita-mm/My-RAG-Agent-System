@@ -134,7 +134,7 @@ def call_standard_rag(query, config):
     # 2. Call LiteLLM for response generation
     litellm_url = f"{LITELLM_API_BASE.rstrip('/')}/chat/completions"
     litellm_payload = {
-        "model": "gemini-3.5-flash",
+        "model": "qwen2.5-coder",
         "messages": [
             {
                 "role": "user",

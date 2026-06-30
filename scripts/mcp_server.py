@@ -100,6 +100,43 @@ LITELLM_BASE = os.environ.get("LITELLM_BASE", "http://localhost:4000")
 LITELLM_KEY = os.environ.get("LITELLM_KEY", "sk-1234")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "multilingual-e5-large")
 
+def generate_local_summary(query: str, context: str) -> str:
+    url = f"{LITELLM_BASE}/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {LITELLM_KEY}",
+        "Content-Type": "application/json"
+    }
+    prompt = f"""以下に提供するドキュメント情報（コンテキスト）のみに基づいて、質問に日本語で正確に回答してください。
+ドキュメントに記述されていない情報については、絶対に推測や自分の知識を使わずに「情報がありません」とだけ答えてください。
+ハルシネーションを厳格に防止してください。
+
+[コンテキスト]
+{context}
+
+[質問]
+{query}
+"""
+    payload = {
+        "model": "qwen2.5-coder",
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "temperature": 0.0
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=25)
+        if response.status_code == 200:
+            data = response.json()
+            return data["choices"][0]["message"]["content"]
+        else:
+            logging.error(f"Local LLM synthesis returned status {response.status_code}: {response.text}")
+    except Exception as e:
+        logging.error(f"Failed to generate local RAG summary via qwen2.5-coder: {e}")
+    return "Error generating local RAG summary."
+
 def get_query_embedding(query: str) -> list:
     if not query or not str(query).strip():
         logging.warning("Empty or whitespace-only query passed to get_query_embedding. Returning empty list.")
@@ -301,9 +338,15 @@ def search_dify_knowledge(query: str) -> str:
                 for record in records:
                     segment = record.get("segment", {})
                     content = segment.get("content", "")
-                    score = record.get("score", 0.0)
-                    results.append(f"Content (Score: {score}):\n{content}\n")
-                final_result = f"[Project: {current_proj or 'default'}] Search Results:\n" + "\n".join(results)
+                    if content:
+                        results.append(content)
+                raw_context = "\n\n".join(results)
+                
+                # ローカルLLM (qwen2.5-coder) で一次要約回答を生成
+                logging.info("Synthesizing retrieved context using local model qwen2.5-coder...")
+                summary = generate_local_summary(query, raw_context)
+                
+                final_result = f"[Project: {current_proj or 'default'} (Local Synthesis)] Answer:\n{summary}"
             
             # キャッシュの保存
             if redis_enabled and query_vector:

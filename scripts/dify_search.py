@@ -10,6 +10,44 @@ if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
 from utils import get_current_project
 
+LITELLM_BASE = os.environ.get("LITELLM_BASE", "http://localhost:4000")
+LITELLM_KEY = os.environ.get("LITELLM_KEY", "sk-1234")
+
+def generate_local_summary(query: str, context: str) -> str:
+    url = f"{LITELLM_BASE}/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {LITELLM_KEY}",
+        "Content-Type": "application/json"
+    }
+    prompt = f"""以下に提供するドキュメント情報（コンテキスト）のみに基づいて、質問に日本語で正確に回答してください。
+ドキュメントに記述されていない情報については、絶対に推測や自分の知識を使わずに「情報がありません」とだけ答えてください。
+ハルシネーションを厳格に防止してください。
+
+[コンテキスト]
+{context}
+
+[質問]
+{query}
+"""
+    payload = {
+        "model": "qwen2.5-coder",
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "temperature": 0.0
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=25)
+        if response.status_code == 200:
+            data = response.json()
+            return data["choices"][0]["message"]["content"]
+    except Exception:
+        pass
+    return "Error generating local RAG summary."
+
 
 def get_project_config(project_id):
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -126,16 +164,17 @@ def search_dify_knowledge(query):
                 print("No matching knowledge found.")
                 return
 
-            print(f"=== Knowledge search results for [Project: {project_id}] ===")
-            for idx, rec in enumerate(records, 1):
+            print(f"=== Knowledge search results for [Project: {project_id}] (Local Synthesis) ===")
+            results = []
+            for rec in records:
                 segment = rec.get("segment", {})
-                score = rec.get("score", 0.0)
                 content = segment.get("content", "")
-                doc_name = segment.get("document", {}).get("name", "Unknown")
-                print(f"\n[{idx}] Document: {doc_name} (Score: {score:.4f})")
-                print("-" * 50)
-                print(content.strip())
-                print("-" * 50)
+                if content:
+                    results.append(content)
+            raw_context = "\n\n".join(results)
+            
+            summary = generate_local_summary(query, raw_context)
+            print(summary)
         else:
             print(
                 f"Error: Dify API returned status code {response.status_code} - {response.text}"
