@@ -362,8 +362,35 @@ impl App {
                     if status.is_success() {
                         if let Ok(val) = res.json::<Value>().await {
                             if let Some(records) = val.get("records").and_then(|r| r.as_array()) {
-                                for rec in records {
-                                    if let Some(content) = rec.get("content").and_then(|c| c.as_str()) {
+                                // Lost in the Middle 対策のコンテキスト再配置を適用
+                                let mut records_vec = records.clone();
+                                if records_vec.len() > 2 {
+                                    records_vec.sort_by(|a, b| {
+                                        let score_a = a.get("score").and_then(|s| s.as_f64()).unwrap_or(0.0);
+                                        let score_b = b.get("score").and_then(|s| s.as_f64()).unwrap_or(0.0);
+                                        score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+                                    });
+                                    let mut reordered = vec![Value::Null; records_vec.len()];
+                                    let mut left = 0;
+                                    let mut right = records_vec.len() - 1;
+                                    for (idx, item) in records_vec.into_iter().enumerate() {
+                                        if idx % 2 == 0 {
+                                            reordered[left] = item;
+                                            left += 1;
+                                        } else {
+                                            reordered[right] = item;
+                                            right -= 1;
+                                        }
+                                    }
+                                    records_vec = reordered;
+                                }
+
+                                for rec in records_vec {
+                                    let content_opt = rec.get("segment")
+                                        .and_then(|s| s.get("content"))
+                                        .or_else(|| rec.get("content"))
+                                        .and_then(|c| c.as_str());
+                                    if let Some(content) = content_opt {
                                         context_str.push_str(content);
                                         context_str.push_str("\n\n");
                                     }
