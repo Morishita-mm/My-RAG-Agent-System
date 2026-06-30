@@ -41,16 +41,18 @@ def trigger_deploy_script():
     try:
         logging.info("Starting automated deploy workflow...")
         
-        # AUTO_DEPLOY=1 を設定して ragy を実行させ、親のキルによるシグナル強制終了を回避します。
-        # git pull で上書きされたバイナリの実行権限と隔離フラグを解除した上で再起動します。
+        # 完全に親プロセスとセッション・シグナルを切り離すため、nohup と & を用いてバックグラウンド実行します。
+        # 親が即座に os._exit(0) してポート 8000 を解放した後、1秒後にデプロイ処理を開始します。
         deploy_cmd = (
-            "sleep 2 && "
-            "echo '\\n--- Automated Deploy Triggered ---' >> logs/deploy.log 2>&1 && "
+            "nohup sh -c '"
+            "sleep 1 && "
+            "echo \"\\n--- Automated Deploy Triggered ---\" >> logs/deploy.log 2>&1 && "
             "git checkout main >> logs/deploy.log 2>&1 && "
             "git pull origin main >> logs/deploy.log 2>&1 && "
             "chmod +x ./ragy >> logs/deploy.log 2>&1 && "
             "xattr -d com.apple.quarantine ./ragy 2>/dev/null || true && "
             "AUTO_DEPLOY=1 ./ragy restart >> logs/deploy.log 2>&1"
+            "' >/dev/null 2>&1 &"
         )
         
         subprocess.Popen(
@@ -59,11 +61,7 @@ def trigger_deploy_script():
             stderr=subprocess.DEVNULL,
             start_new_session=True
         )
-        logging.info("Deploy command triggered. Self-exiting to release port 8000...")
-        
-        # Uvicornがクライアント（GitHub）へ 200 OK レレスポンスを返し終えるのを待ってから自身を即座に終了する
-        import time
-        time.sleep(1.5)
+        logging.info("Deploy command triggered. Self-exiting immediately to release port 8000...")
         os._exit(0)
     except Exception as e:
         logging.error(f"Failed to trigger deploy command: {e}")
