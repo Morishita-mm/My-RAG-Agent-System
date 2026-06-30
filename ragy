@@ -301,6 +301,9 @@ show_status() {
   # 5. Docker Containers status
   echo "Docker Services :"
   docker compose ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
+
+  # 6. Document Sync Status (Task 4)
+  "$PYTHON_CMD" scripts/sync_status.py
 }
 
 init_project() {
