@@ -3,9 +3,25 @@ use std::path::Path;
 use serde_json::Value;
 use std::collections::HashMap;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TuiMode {
+    ProjectList,
+    ConfirmDelete,
+    Chat,
+}
+
+#[derive(Clone)]
+pub struct ChatMessage {
+    pub is_user: bool,
+    pub content: String,
+}
+
 #[derive(Clone)]
 pub struct ProjectInfo {
     pub name: String,
+    pub dataset_id: String,
+    pub api_key: String,
+    pub api_base: String,
     pub synced_files: usize,
     pub pending_files: usize,
 }
@@ -22,6 +38,12 @@ pub struct App {
     pub should_quit: bool,
     pub status_message: String,
     pub redis_connected: bool,
+    
+    // NotebookLM / Vim 拡張用
+    pub mode: TuiMode,
+    pub chat_history: Vec<ChatMessage>,
+    pub input_buffer: String,
+    pub is_loading_chat: bool,
 }
 
 impl App {
@@ -33,14 +55,19 @@ impl App {
             semantic_cache_count: 0,
             hit_rate: 87.5,
             logs: vec![
-                "Press 'S' to run sync_docs.py".to_string(),
-                "Press 'C' to clear active Redis caches".to_string(),
-                "Press 'Tab' to switch views, 'Q' to exit.".to_string(),
+                "=== Keybindings ===".to_string(),
+                "Press 'j' / 'k' to move. Enter to start RAG Chat.".to_string(),
+                "Press 'd' to delete the selected knowledge base.".to_string(),
+                "Press 'S' to sync, 'C' to clear Redis cache.".to_string(),
             ],
             active_tab: 0,
             should_quit: false,
             status_message: "Initializing TUI...".to_string(),
             redis_connected: false,
+            mode: TuiMode::ProjectList,
+            chat_history: Vec::new(),
+            input_buffer: String::new(),
+            is_loading_chat: false,
         }
     }
 
@@ -77,7 +104,10 @@ impl App {
         if let Ok(content) = fs::read_to_string(config_path) {
             if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&content) {
                 if let Some(Value::Object(projects_obj)) = map.get("projects") {
-                    for (project_name, _) in projects_obj {
+                    for (project_name, proj_val) in projects_obj {
+                        let dataset_id = proj_val.get("dataset_id").and_then(|d| d.as_str()).unwrap_or("").to_string();
+                        let api_key = proj_val.get("api_key").and_then(|k| k.as_str()).unwrap_or("").to_string();
+                        let api_base = proj_val.get("api_base").and_then(|b| b.as_str()).unwrap_or("").to_string();
                         let project_dir = Path::new("docs").join(project_name);
                         
                         let mut local_files = Vec::new();
@@ -132,6 +162,9 @@ impl App {
 
                         detected_projects.push(ProjectInfo {
                             name: project_name.clone(),
+                            dataset_id,
+                            api_key,
+                            api_base,
                             synced_files,
                             pending_files,
                         });
@@ -207,5 +240,137 @@ impl App {
                 self.add_log("Redis connection refused during clear.".to_string());
             }
         }
+    }
+
+    pub async fn delete_selected_project(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if self.projects.is_empty() { return Ok(()); }
+        let project = &self.projects[self.selected_project_index];
+        
+        let client = reqwest::Client::new();
+        
+        // 1. Dify API でデータセットを削除
+        let delete_url = format!("{}/datasets/{}", project.api_base, project.dataset_id);
+        let _ = client.delete(&delete_url)
+            .header("Authorization", format!("Bearer {}", project.api_key))
+            .send()
+            .await;
+            
+        // 2. sync_config.json からプロジェクトを削除
+        let config_path = Path::new("docs/sync_config.json");
+        if config_path.exists() {
+            if let Ok(content) = fs::read_to_string(config_path) {
+                if let Ok(mut val) = serde_json::from_str::<Value>(&content) {
+                    if let Some(projects_obj) = val.get_mut("projects").and_then(|p| p.as_object_mut()) {
+                        projects_obj.remove(&project.name);
+                        let updated_json = serde_json::to_string_pretty(&val)?;
+                        fs::write(config_path, updated_json)?;
+                    }
+                }
+            }
+        }
+        
+        // 3. 同期メタデータ (.dify_sync_meta.json) からそのプロジェクト関連ファイルを削除
+        let meta_path = Path::new(".dify_sync_meta.json");
+        if meta_path.exists() {
+            if let Ok(content) = fs::read_to_string(meta_path) {
+                if let Ok(mut val) = serde_json::from_str::<Value>(&content) {
+                    if let Some(meta_obj) = val.as_object_mut() {
+                        let project_prefix = format!("docs/{}", project.name);
+                        meta_obj.retain(|k, _| !k.starts_with(&project_prefix));
+                        let updated_json = serde_json::to_string_pretty(&val)?;
+                        fs::write(meta_path, updated_json)?;
+                    }
+                }
+            }
+        }
+
+        self.add_log(format!("Deleted knowledge base '{}' from Dify.", project.name));
+        self.load_project_metadata();
+        self.selected_project_index = 0;
+        
+        Ok(())
+    }
+
+    pub async fn send_rag_chat(&mut self, query: String, tx: tokio::sync::mpsc::Sender<String>) {
+        if self.projects.is_empty() { return; }
+        let project = self.projects[self.selected_project_index].clone();
+        
+        self.is_loading_chat = true;
+        self.chat_history.push(ChatMessage {
+            is_user: true,
+            content: query.clone(),
+        });
+
+        tokio::spawn(async move {
+            let client = reqwest::Client::new();
+            
+            // 1. Dify Retrieval API でコンテキストを取得
+            let retrieve_url = format!("{}/datasets/{}/retrieve", project.api_base, project.dataset_id);
+            let retrieve_res = client.post(&retrieve_url)
+                .header("Authorization", format!("Bearer {}", project.api_key))
+                .json(&serde_json::json!({
+                    "query": query,
+                    "retrieval_model": {
+                        "search_method": "hybrid_search",
+                        "top_k": 3
+                    }
+                }))
+                .send()
+                .await;
+
+            let mut context_str = String::new();
+            if let Ok(res) = retrieve_res {
+                if let Ok(val) = res.json::<Value>().await {
+                    if let Some(records) = val.get("records").and_then(|r| r.as_array()) {
+                        for rec in records {
+                            if let Some(content) = rec.get("content").and_then(|c| c.as_str()) {
+                                context_str.push_str(content);
+                                context_str.push_str("\n\n");
+                            }
+                        }
+                    }
+                }
+            }
+
+            if context_str.is_empty() {
+                context_str = "No relevant context found in dataset.".to_string();
+            }
+
+            // 2. LiteLLM Proxy を介して LLM を呼び出す
+            let litellm_url = "http://localhost:4000/v1/chat/completions";
+            let chat_res = client.post(litellm_url)
+                .header("Authorization", "Bearer sk-1234")
+                .json(&serde_json::json!({
+                    "model": "openai/gemini-1.5-flash",
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "You are a helpful coding assistant. Use the provided context to answer the user's question accurately. If you don't know the answer based on the context, say so."
+                        },
+                        {
+                            "role": "user",
+                            "content": format!("Context:\n{}\n\nQuestion: {}", context_str, query)
+                        }
+                    ]
+                }))
+                .send()
+                .await;
+
+            let mut reply_content = "Failed to connect to LLM Proxy.".to_string();
+            if let Ok(res) = chat_res {
+                if let Ok(val) = res.json::<Value>().await {
+                    if let Some(content) = val.get("choices")
+                        .and_then(|c| c.as_array())
+                        .and_then(|a| a.first())
+                        .and_then(|f| f.get("message"))
+                        .and_then(|m| m.get("content"))
+                        .and_then(|s| s.as_str()) {
+                            reply_content = content.to_string();
+                        }
+                }
+            }
+
+            let _ = tx.send(reply_content).await;
+        });
     }
 }

@@ -1,7 +1,7 @@
 pub mod app;
 pub mod ui;
 
-use app::App;
+use app::{App, TuiMode, ChatMessage};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -25,8 +25,11 @@ pub async fn run_tui() -> Result<(), Box<dyn Error>> {
     app.load_project_metadata();
     app.fetch_redis_stats().await;
 
-    // 非同期イベントチャネル (Python 同期処理のログ受け渡し用)
+    // 非同期イベントチャネル (Python 同期処理のログ用)
     let (tx, mut rx) = mpsc::channel::<String>(100);
+
+    // 非同期チャット回答チャネル
+    let (chat_tx, mut chat_rx) = mpsc::channel::<String>(100);
 
     let mut last_redis_tick = std::time::Instant::now();
 
@@ -34,6 +37,16 @@ pub async fn run_tui() -> Result<(), Box<dyn Error>> {
         // 非同期ログの受信
         while let Ok(msg) = rx.try_recv() {
             app.add_log(msg);
+        }
+
+        // 非同期チャット回答の受信
+        while let Ok(reply) = chat_rx.try_recv() {
+            app.chat_history.push(ChatMessage {
+                is_user: false,
+                content: reply,
+            });
+            app.is_loading_chat = false;
+            app.status_message = "RAG reply received.".to_string();
         }
 
         // 定期的に Redis 状態を更新 (5秒おき)
@@ -46,45 +59,109 @@ pub async fn run_tui() -> Result<(), Box<dyn Error>> {
         terminal.draw(|f| ui::draw(f, &mut app))?;
 
         // イベントポーリング
-        if event::poll(Duration::from_millis(100))? {
+        if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Char('q') | KeyCode::Char('Q') => {
-                        break;
-                    }
-                    KeyCode::Tab => {
-                        app.active_tab = (app.active_tab + 1) % 2;
-                        app.status_message = format!("Switched view to tab {}.", app.active_tab + 1);
-                    }
-                    KeyCode::Char('c') | KeyCode::Char('C') => {
-                        app.add_log("Triggering cache clear...".to_string());
-                        app.clear_project_cache().await;
-                    }
-                    KeyCode::Char('s') | KeyCode::Char('S') => {
-                        app.add_log("Initiating document sync in background...".to_string());
-                        let tx_clone = tx.clone();
-                        // バックグラウンドで Python 同期スクリプトを実行し、出力を非同期チャネル経由でTUIに反映
-                        tokio::spawn(async move {
-                            let output = Command::new("python3")
-                                .arg("scripts/sync_docs.py")
-                                .output();
-                            match output {
-                                Ok(out) => {
-                                    let stdout_str = String::from_utf8_lossy(&out.stdout).to_string();
-                                    for line in stdout_str.lines() {
-                                        if !line.trim().is_empty() {
-                                            let _ = tx_clone.send(line.to_string()).await;
-                                        }
-                                    }
-                                    let _ = tx_clone.send("=== Sync finished successfully ===".to_string()).await;
-                                }
-                                Err(e) => {
-                                    let _ = tx_clone.send(format!("Sync launch failed: {}", e)).await;
+                match app.mode {
+                    TuiMode::ProjectList => {
+                        match key.code {
+                            KeyCode::Char('q') | KeyCode::Char('Q') => {
+                                break;
+                            }
+                            KeyCode::Tab => {
+                                app.active_tab = (app.active_tab + 1) % 2;
+                                app.status_message = format!("Switched view to tab {}.", app.active_tab + 1);
+                            }
+                            KeyCode::Char('j') | KeyCode::Down => {
+                                if !app.projects.is_empty() {
+                                    app.selected_project_index = (app.selected_project_index + 1) % app.projects.len();
                                 }
                             }
-                        });
+                            KeyCode::Char('k') | KeyCode::Up => {
+                                if !app.projects.is_empty() {
+                                    app.selected_project_index = (app.selected_project_index + app.projects.len() - 1) % app.projects.len();
+                                }
+                            }
+                            KeyCode::Char('d') => {
+                                if !app.projects.is_empty() {
+                                    app.mode = TuiMode::ConfirmDelete;
+                                    app.status_message = "Confirm delete? Press 'y' to delete, 'n' to cancel.".to_string();
+                                }
+                            }
+                            KeyCode::Enter => {
+                                if !app.projects.is_empty() {
+                                    app.mode = TuiMode::Chat;
+                                    app.chat_history.clear();
+                                    app.input_buffer.clear();
+                                    app.status_message = "Entered NotebookLM Chat Mode. Type prompt and press Enter.".to_string();
+                                }
+                            }
+                            KeyCode::Char('c') | KeyCode::Char('C') => {
+                                app.add_log("Triggering cache clear...".to_string());
+                                app.clear_project_cache().await;
+                            }
+                            KeyCode::Char('s') | KeyCode::Char('S') => {
+                                app.add_log("Initiating document sync in background...".to_string());
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let output = Command::new("python3")
+                                        .arg("scripts/sync_docs.py")
+                                        .output();
+                                    match output {
+                                        Ok(out) => {
+                                            let stdout_str = String::from_utf8_lossy(&out.stdout).to_string();
+                                            for line in stdout_str.lines() {
+                                                if !line.trim().is_empty() {
+                                                    let _ = tx_clone.send(line.to_string()).await;
+                                                }
+                                            }
+                                            let _ = tx_clone.send("=== Sync finished successfully ===".to_string()).await;
+                                        }
+                                        Err(e) => {
+                                            let _ = tx_clone.send(format!("Sync launch failed: {}", e)).await;
+                                        }
+                                    }
+                                });
+                            }
+                            _ => {}
+                        }
                     }
-                    _ => {}
+                    TuiMode::ConfirmDelete => {
+                        match key.code {
+                            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                                app.status_message = "Deleting project dataset...".to_string();
+                                let _ = app.delete_selected_project().await;
+                                app.mode = TuiMode::ProjectList;
+                            }
+                            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                                app.mode = TuiMode::ProjectList;
+                                app.status_message = "Deletion cancelled.".to_string();
+                            }
+                            _ => {}
+                        }
+                    }
+                    TuiMode::Chat => {
+                        match key.code {
+                            KeyCode::Esc => {
+                                app.mode = TuiMode::ProjectList;
+                                app.status_message = "Exited Chat Mode.".to_string();
+                            }
+                            KeyCode::Enter => {
+                                let query = app.input_buffer.trim().to_string();
+                                if !query.is_empty() && !app.is_loading_chat {
+                                    app.input_buffer.clear();
+                                    app.status_message = "Retrieving context & generating answer...".to_string();
+                                    app.send_rag_chat(query, chat_tx.clone()).await;
+                                }
+                            }
+                            KeyCode::Backspace => {
+                                app.input_buffer.pop();
+                            }
+                            KeyCode::Char(c) => {
+                                app.input_buffer.push(c);
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
         }
