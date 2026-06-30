@@ -307,8 +307,11 @@ init_project() {
   local dataset_id=$1
   local target_dir=$(pwd)
   local project_name
+
+  # 1. カレントディレクトリが所属している Git リポジトリ名
   if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     project_name=$(basename "$(git rev-parse --show-toplevel)")
+  # 2. カレントディレクトリ名
   else
     project_name=$(basename "$target_dir")
   fi

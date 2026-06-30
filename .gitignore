@@ -11,3 +11,4 @@ volumes/
 .aider*
 docs/*
 logs/
+.rag-project

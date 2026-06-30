@@ -7,6 +7,12 @@ import redis
 import math
 import uuid
 from langsmith import traceable
+import sys
+import os
+script_dir = os.path.dirname(os.path.abspath(__file__))
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
+from utils import get_current_project as get_base_project
 
 # ログ設定
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -34,10 +40,11 @@ except Exception as e:
     redis_enabled = False
 
 def get_current_project():
-    env_proj = os.environ.get("CURRENT_PROJECT")
-    if env_proj:
-        return env_proj
+    proj = get_base_project()
+    if proj:
+        return proj
 
+    # 従来の互換性フォールバック (Continue 設定の読み込み)
     continue_config = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".continue/config.json")
     if os.path.exists(continue_config):
         try:

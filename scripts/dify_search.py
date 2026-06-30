@@ -4,13 +4,11 @@ import os
 import requests
 
 
-def get_current_project():
-    local_config = ".rag-project"
-    if os.path.exists(local_config):
-        with open(local_config, "r") as f:
-            return f.read().strip()
-
-    return os.environ.get("PROJECT_ID", os.path.basename(os.getcwd()))
+# パス解決とユーティリティのインポート
+script_dir = os.path.dirname(os.path.abspath(__file__))
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
+from utils import get_current_project
 
 
 def get_project_config(project_id):

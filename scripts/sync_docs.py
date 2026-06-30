@@ -389,13 +389,11 @@ class DifySyncHandler(FileSystemEventHandler):
     def sync_project_once(self, project_name):
         config = self.project_configs.get(project_name)
         if not config:
-            logging.error(f"No Dify config found for project: {project_name}. Please run 'ragy init' first.")
-            sys.exit(1)
+            raise ValueError(f"No Dify config found for project: {project_name}. Please run 'ragy init' first.")
 
         project_dir = os.path.join(self.watch_dir, project_name)
         if not os.path.exists(project_dir):
-            logging.error(f"Project directory does not exist: {project_dir}")
-            sys.exit(1)
+            raise FileNotFoundError(f"Project directory does not exist: {project_dir}")
 
         logging.info(f"Starting one-shot sync for project: {project_name} in {project_dir}")
 
@@ -453,7 +451,11 @@ def main():
     event_handler = DifySyncHandler(watch_dir, api_base, api_key, dataset_id)
 
     if args.sync_project:
-        event_handler.sync_project_once(args.sync_project)
+        try:
+            event_handler.sync_project_once(args.sync_project)
+        except Exception as e:
+            logging.error(f"Sync project failed: {e}")
+            sys.exit(1)
         return
 
     observer = Observer()
