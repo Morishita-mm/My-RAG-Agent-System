@@ -8,6 +8,8 @@ import requests
 import argparse
 import redis
 import uuid
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
@@ -69,6 +71,9 @@ class DifySyncHandler(FileSystemEventHandler):
                     logging.error(f"sync_docs.py failed to connect to Redis on both 'redis' and 'localhost': {fallback_err}. Falling back to synchronous execution.")
             else:
                 logging.error(f"sync_docs.py failed to connect to Redis: {e}. Falling back to synchronous execution.")
+        
+        # メタデータ書き込み排他制御用の再入可能ロック (タスク1/選択肢C)
+        self.meta_lock = threading.RLock()
 
     def get_doc_id(self, file_path):
         config = self.get_project_config(file_path)
@@ -148,11 +153,29 @@ class DifySyncHandler(FileSystemEventHandler):
         return {}
 
     def save_metadata(self):
+        with self.meta_lock:
+            try:
+                with open(self.meta_file, 'w', encoding='utf-8') as f:
+                    json.dump(self.metadata, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                logging.error(f"Failed to save metadata file: {e}")
+
+    # プロジェクト別 Redis キャッシュパージの実装 (タスク3/選択肢E)
+    def purge_project_cache(self, project_name):
+        if not self.redis_enabled or not project_name:
+            return
         try:
-            with open(self.meta_file, 'w', encoding='utf-8') as f:
-                json.dump(self.metadata, f, ensure_ascii=False, indent=2)
+            exact_pattern = f"mcp_exact_cache:{project_name}:*"
+            exact_keys = self.redis_client.keys(exact_pattern)
+            semantic_pattern = f"mcp_cache:{project_name}:*"
+            semantic_keys = self.redis_client.keys(semantic_pattern)
+            
+            all_keys = list(exact_keys) + list(semantic_keys)
+            if all_keys:
+                self.redis_client.delete(*all_keys)
+                logging.info(f"[Active Cache Purge] Purged {len(all_keys)} keys for project: {project_name}")
         except Exception as e:
-            logging.error(f"Failed to save metadata file: {e}")
+            logging.error(f"Failed to purge cache for project {project_name}: {e}")
 
     def is_target_file(self, file_path):
         return file_path.lower().endswith(self.supported_extensions) and not ".parsed_cache" in file_path
@@ -221,13 +244,20 @@ class DifySyncHandler(FileSystemEventHandler):
                 doc_id = res_data.get("document", {}).get("id")
                 if doc_id:
                     current_hash = self.get_file_hash(file_path)
-                    self.metadata[file_path] = {
-                        "doc_id": doc_id,
-                        "hash": current_hash,
-                        "dataset_id": dataset_id
-                    }
+                    with self.meta_lock:
+                        self.metadata[file_path] = {
+                            "doc_id": doc_id,
+                            "hash": current_hash,
+                            "dataset_id": dataset_id
+                        }
+                        self.file_hashes[file_path] = current_hash
                     self.save_metadata()
-                    self.file_hashes[file_path] = current_hash
+                    
+                    # キャッシュパージ (タスク3/選択肢E)
+                    project_name = self.get_project_name(file_path)
+                    if project_name:
+                        self.purge_project_cache(project_name)
+                        
                     logging.info(f"Successfully uploaded: {filename} (source: {os.path.basename(file_path)}) to dataset {dataset_id} (ID: {doc_id})")
                 else:
                     logging.warning(f"Uploaded {filename} but no document ID returned: {res_data}")
@@ -276,13 +306,20 @@ class DifySyncHandler(FileSystemEventHandler):
             
             if response.status_code in (200, 201):
                 current_hash = self.get_file_hash(file_path)
-                self.metadata[file_path] = {
-                    "doc_id": doc_id,
-                    "hash": current_hash,
-                    "dataset_id": dataset_id
-                }
+                with self.meta_lock:
+                    self.metadata[file_path] = {
+                        "doc_id": doc_id,
+                        "hash": current_hash,
+                        "dataset_id": dataset_id
+                    }
+                    self.file_hashes[file_path] = current_hash
                 self.save_metadata()
-                self.file_hashes[file_path] = current_hash
+                
+                # キャッシュパージ (タスク3/選択肢E)
+                project_name = self.get_project_name(file_path)
+                if project_name:
+                    self.purge_project_cache(project_name)
+                    
                 logging.info(f"Successfully updated: {filename} (source: {os.path.basename(file_path)}) in dataset {dataset_id} (ID: {doc_id})")
             else:
                 logging.error(f"Failed to update {filename} in dataset {dataset_id}: {response.status_code} - {response.text}")
@@ -305,11 +342,17 @@ class DifySyncHandler(FileSystemEventHandler):
         try:
             response = requests.delete(url, headers=headers, timeout=15)
             if response.status_code in (200, 204):
-                if file_path in self.metadata:
-                    del self.metadata[file_path]
-                    self.save_metadata()
-                if file_path in self.file_hashes:
-                    del self.file_hashes[file_path]
+                with self.meta_lock:
+                    if file_path in self.metadata:
+                        del self.metadata[file_path]
+                    if file_path in self.file_hashes:
+                        del self.file_hashes[file_path]
+                self.save_metadata()
+                
+                # キャッシュパージ (タスク3/選択肢E)
+                project_name = self.get_project_name(file_path)
+                if project_name:
+                    self.purge_project_cache(project_name)
                 
                 # キャッシュが存在する場合はキャッシュファイルも削除
                 ext = os.path.splitext(file_path)[1].lower()
@@ -427,27 +470,43 @@ class DifySyncHandler(FileSystemEventHandler):
                 meta_project_files.append(file_path)
 
         # 1. アップロードおよび更新処理
-        for file_path in local_files:
-            doc_id = self.get_doc_id(file_path)
-            current_hash = self.get_file_hash(file_path)
-            saved_hash = self.get_saved_hash(file_path)
+        futures = []
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            for file_path in local_files:
+                doc_id = self.get_doc_id(file_path)
+                current_hash = self.get_file_hash(file_path)
+                saved_hash = self.get_saved_hash(file_path)
 
-            if not doc_id:
-                logging.info(f"File not registered. Uploading: {file_path}")
-                self.upload_file(file_path)
-            elif current_hash != saved_hash:
-                logging.info(f"File changed. Updating: {file_path}")
-                self.update_file(file_path, doc_id)
-            else:
-                logging.info(f"File unchanged. Skipping: {file_path}")
+                if not doc_id:
+                    logging.info(f"File not registered. Uploading: {file_path}")
+                    futures.append(executor.submit(self.upload_file, file_path))
+                elif current_hash != saved_hash:
+                    logging.info(f"File changed. Updating: {file_path}")
+                    futures.append(executor.submit(self.update_file, file_path, doc_id))
+                else:
+                    logging.info(f"File unchanged. Skipping: {file_path}")
+            
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    logging.error(f"Error in parallel sync upload/update: {e}")
 
         # 2. ローカルに存在せず、メタデータにあるファイルをDifyから削除
-        for file_path in meta_project_files:
-            if file_path not in local_files:
-                doc_id = self.get_doc_id(file_path)
-                if doc_id:
-                    logging.info(f"File deleted locally. Deleting from Dify: {file_path}")
-                    self.delete_file(file_path, doc_id)
+        futures = []
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            for file_path in meta_project_files:
+                if file_path not in local_files:
+                    doc_id = self.get_doc_id(file_path)
+                    if doc_id:
+                        logging.info(f"File deleted locally. Deleting from Dify: {file_path}")
+                        futures.append(executor.submit(self.delete_file, file_path, doc_id))
+            
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    logging.error(f"Error in parallel sync deletion: {e}")
 
 def main():
     parser = argparse.ArgumentParser(description="Sync local markdown documents to Dify dataset.")
