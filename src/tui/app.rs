@@ -375,10 +375,13 @@ impl App {
                 .unwrap_or_else(|_| "http://localhost:4000/v1".to_string());
             let litellm_url = format!("{}/chat/completions", litellm_base);
             
+            let llm_model = std::env::var("RAGY_LLM_MODEL")
+                .unwrap_or_else(|_| "gemini-2.5-flash".to_string());
+
             let chat_res = client.post(&litellm_url)
                 .header("Authorization", "Bearer sk-1234")
                 .json(&serde_json::json!({
-                    "model": "openai/gemini-1.5-flash",
+                    "model": llm_model,
                     "messages": [
                         {
                             "role": "system",
@@ -517,5 +520,59 @@ mod tests {
         
         // 環境変数をクリーンアップ
         std::env::remove_var("LITELLM_API_BASE");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_real_e2e_rag_chat_flow() {
+        // .env を手動で読み込んで環境変数にセット
+        if let Ok(content) = std::fs::read_to_string(".env") {
+            for line in content.lines() {
+                if line.trim().is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                if let Some((key, val)) = line.split_once('=') {
+                    std::env::set_var(key.trim(), val.trim());
+                }
+            }
+        }
+        
+        let api_key = std::env::var("DIFY_DATASET_API_KEY")
+            .expect("DIFY_DATASET_API_KEY must be set in .env for E2E integration test");
+            
+        let mut app = App::new();
+        app.projects = vec![
+            ProjectInfo {
+                name: "RealTest".to_string(),
+                dataset_id: "d42ec795-1e17-4ced-8efa-8996e479ae23".to_string(), // 実在するMy-GitHub-RAGのデータセットID
+                api_key,
+                api_base: "http://localhost:8080/v1".to_string(), // 本番Dify Gateway
+                synced_files: 1,
+                pending_files: 0,
+            }
+        ];
+        app.selected_project_index = 0;
+        app.mode = TuiMode::Chat;
+
+        let (chat_tx, mut chat_rx) = mpsc::channel::<String>(10);
+        
+        // 実際の RAG チャット呼び出しをトリガー
+        app.send_rag_chat("What is My-RAG-Agent-System?".to_string(), chat_tx).await;
+        
+        // リアルな LLM からの応答を最大 15 秒間待機
+        let mut received_reply = None;
+        for _ in 0..150 {
+            if let Ok(reply) = chat_rx.try_recv() {
+                received_reply = Some(reply);
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+
+        assert!(received_reply.is_some(), "E2E: Should receive RAG chat reply from real LiteLLM Proxy / Dify");
+        let reply = received_reply.unwrap();
+        println!("Real E2E Response: {}", reply);
+        assert!(!reply.contains("Error:"), "Should not contain Error string, but got: {}", reply);
+        assert!(reply.len() > 10, "Response should be a valid text explanation");
     }
 }
