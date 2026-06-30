@@ -144,5 +144,35 @@ class TestDocumentParser(unittest.TestCase):
         mock_open.assert_called_once_with("test_screenshot.png")
         mock_vision.assert_called_once_with(mock_img)
 
+    @patch('requests.post')
+    def test_analyze_image_with_vision_uses_env(self, mock_post):
+        """Test analyze_image_with_vision resolves model_name from environment variable"""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "choices": [{"message": {"content": "Decoded."}}]
+        }
+        mock_post.return_value = mock_response
+        
+        mock_img = MagicMock()
+        
+        # 環境変数をダミーモデル名に設定
+        with patch.dict(os.environ, {"VISION_MODEL": "ollama/llama3.2-vision"}):
+            document_parser.analyze_image_with_vision(mock_img)
+            
+        called_args, called_kwargs = mock_post.call_args
+        payload = called_kwargs.get("json", {})
+        self.assertEqual(payload.get("model"), "ollama/llama3.2-vision")
+        
+        # 環境変数がない場合のデフォルト (gemini-1.5-flash)
+        with patch.dict(os.environ, {}):
+            if "VISION_MODEL" in os.environ:
+                del os.environ["VISION_MODEL"]
+            document_parser.analyze_image_with_vision(mock_img)
+            
+        called_args, called_kwargs = mock_post.call_args
+        payload = called_kwargs.get("json", {})
+        self.assertEqual(payload.get("model"), "gemini-1.5-flash")
+
 if __name__ == '__main__':
     unittest.main()
