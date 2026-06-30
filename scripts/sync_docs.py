@@ -71,15 +71,27 @@ class DifySyncHandler(FileSystemEventHandler):
                 logging.error(f"sync_docs.py failed to connect to Redis: {e}. Falling back to synchronous execution.")
 
     def get_doc_id(self, file_path):
+        config = self.get_project_config(file_path)
+        if not config:
+            return None
+        dataset_id = config.get("dataset_id")
+
         val = self.metadata.get(file_path)
         if isinstance(val, dict):
-            return val.get("doc_id")
-        return val
+            if val.get("dataset_id") == dataset_id:
+                return val.get("doc_id")
+        return None
 
     def get_saved_hash(self, file_path):
+        config = self.get_project_config(file_path)
+        if not config:
+            return None
+        dataset_id = config.get("dataset_id")
+
         val = self.metadata.get(file_path)
         if isinstance(val, dict):
-            return val.get("hash")
+            if val.get("dataset_id") == dataset_id:
+                return val.get("hash")
         return None
 
     def load_project_configs(self):
@@ -211,7 +223,8 @@ class DifySyncHandler(FileSystemEventHandler):
                     current_hash = self.get_file_hash(file_path)
                     self.metadata[file_path] = {
                         "doc_id": doc_id,
-                        "hash": current_hash
+                        "hash": current_hash,
+                        "dataset_id": dataset_id
                     }
                     self.save_metadata()
                     self.file_hashes[file_path] = current_hash
@@ -265,7 +278,8 @@ class DifySyncHandler(FileSystemEventHandler):
                 current_hash = self.get_file_hash(file_path)
                 self.metadata[file_path] = {
                     "doc_id": doc_id,
-                    "hash": current_hash
+                    "hash": current_hash,
+                    "dataset_id": dataset_id
                 }
                 self.save_metadata()
                 self.file_hashes[file_path] = current_hash
