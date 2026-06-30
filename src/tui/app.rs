@@ -71,6 +71,22 @@ pub struct App {
     pub chat_scroll_offset: usize,
 }
 
+fn log_tui_debug(msg: &str) {
+    let project_root = get_project_root();
+    let log_path = project_root.join("logs/tui_debug.log");
+    if let Some(parent) = log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        let local_time = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+        let _ = std::io::Write::write_all(&mut file, format!("[{}] {}\n", local_time, msg).as_bytes());
+    }
+}
+
 impl App {
     pub fn new() -> Self {
         let project_root = get_project_root();
@@ -341,6 +357,10 @@ impl App {
                 .unwrap_or(false);
 
             let retrieve_url = format!("{}/datasets/{}/retrieve", project.api_base, project.dataset_id);
+            
+            log_tui_debug(&format!("=== NEW CHAT QUERY: '{}' (Project: {}) ===", query, project.name));
+            log_tui_debug(&format!("Dify Retrieve URL: {}", retrieve_url));
+            
             let retrieve_res = client.post(&retrieve_url)
                 .header("Authorization", format!("Bearer {}", project.api_key))
                 .json(&serde_json::json!({
@@ -359,9 +379,12 @@ impl App {
             match retrieve_res {
                 Ok(res) => {
                     let status = res.status();
+                    log_tui_debug(&format!("Dify Retrieve HTTP Status: {}", status));
                     if status.is_success() {
                         if let Ok(val) = res.json::<Value>().await {
+                            log_tui_debug(&format!("Dify Retrieve Raw Response: {}", val));
                             if let Some(records) = val.get("records").and_then(|r| r.as_array()) {
+                                log_tui_debug(&format!("Retrieved {} records from Dify.", records.len()));
                                 // Lost in the Middle 対策のコンテキスト再配置を適用
                                 let mut records_vec = records.clone();
                                 if records_vec.len() > 2 {
@@ -397,23 +420,29 @@ impl App {
                                 }
                             }
                         } else {
+                            log_tui_debug("Error: Failed to parse Dify Retrieval response JSON.");
                             let _ = tx.send("Error: Failed to parse Dify Retrieval response JSON.".to_string()).await;
                             return;
                         }
                     } else {
                         let err_text = res.text().await.unwrap_or_default();
+                        log_tui_debug(&format!("Dify Retrieval HTTP Error {}: {}", status, err_text));
                         let _ = tx.send(format!("Dify Retrieval HTTP Error {}: {}", status, err_text)).await;
                         return;
                     }
                 }
                 Err(e) => {
+                    log_tui_debug(&format!("Dify Retrieval Connect Error: {}", e));
                     let _ = tx.send(format!("Dify Retrieval Connect Error: {}", e)).await;
                     return;
                 }
             }
 
             if context_str.is_empty() {
+                log_tui_debug("Warning: Extracted context is empty!");
                 context_str = "No relevant context found in dataset.".to_string();
+            } else {
+                log_tui_debug(&format!("Final Context String passed to LLM ({} chars):\n{}", context_str.len(), context_str));
             }
 
             // 2. LiteLLM Proxy を介して LLM を呼び出す
@@ -424,29 +453,35 @@ impl App {
             let llm_model = std::env::var("RAGY_LLM_MODEL")
                 .unwrap_or_else(|_| "gemini-2.5-flash".to_string());
 
+            let chat_payload = serde_json::json!({
+                "model": llm_model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You are a helpful coding assistant. Use the provided context to answer the user's question accurately. If you don't know the answer based on the context, say so."
+                    },
+                    {
+                        "role": "user",
+                        "content": format!("Context:\n{}\n\nQuestion: {}", context_str, query)
+                    }
+                ]
+            });
+            log_tui_debug(&format!("LiteLLM URL: {}", litellm_url));
+            log_tui_debug(&format!("LiteLLM Payload: {}", chat_payload));
+
             let chat_res = client.post(&litellm_url)
                 .header("Authorization", "Bearer sk-1234")
-                .json(&serde_json::json!({
-                    "model": llm_model,
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": "You are a helpful coding assistant. Use the provided context to answer the user's question accurately. If you don't know the answer based on the context, say so."
-                        },
-                        {
-                            "role": "user",
-                            "content": format!("Context:\n{}\n\nQuestion: {}", context_str, query)
-                        }
-                    ]
-                }))
+                .json(&chat_payload)
                 .send()
                 .await;
 
             let reply_content = match chat_res {
                 Ok(res) => {
                     let status = res.status();
+                    log_tui_debug(&format!("LiteLLM Response Status: {}", status));
                     if status.is_success() {
                         if let Ok(val) = res.json::<Value>().await {
+                            log_tui_debug(&format!("LiteLLM Raw Response: {}", val));
                             if let Some(content) = val.get("choices")
                                 .and_then(|c| c.as_array())
                                 .and_then(|a| a.first())
@@ -458,18 +493,22 @@ impl App {
                                     format!("Error: Unexpected LLM Response Format: {:?}", val)
                                 }
                         } else {
+                            log_tui_debug("Error: Failed to parse LLM Response JSON.");
                             "Error: Failed to parse LLM Response JSON.".to_string()
                         }
                     } else {
                         let err_text = res.text().await.unwrap_or_default();
+                        log_tui_debug(&format!("LiteLLM Proxy HTTP Error {}: {}", status, err_text));
                         format!("LLM Proxy HTTP Error {}: {}", status, err_text)
                     }
                 }
                 Err(e) => {
+                    log_tui_debug(&format!("LiteLLM Proxy Connect Error: {}", e));
                     format!("LLM Proxy Connect Error: {}", e)
                 }
             };
 
+            log_tui_debug(&format!("LLM Reply: {}", reply_content));
             let _ = tx.send(reply_content).await;
         });
     }
