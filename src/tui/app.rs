@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
 use serde_json::Value;
+use std::collections::HashMap;
 
 #[derive(Clone)]
 pub struct ProjectInfo {
@@ -51,37 +52,97 @@ impl App {
     }
 
     pub fn load_project_metadata(&mut self) {
+        let config_path = Path::new("docs/sync_config.json");
         let meta_path = Path::new(".dify_sync_meta.json");
-        if !meta_path.exists() {
-            self.status_message = "Metadata file (.dify_sync_meta.json) not found.".to_string();
-            // ダミー値をセットして空ではないことをTUIで見せる
-            self.projects = vec![
-                ProjectInfo {
-                    name: "Lissue (Local)".to_string(),
-                    synced_files: 0,
-                    pending_files: 0,
-                }
-            ];
+
+        if !config_path.exists() {
+            self.status_message = "No config docs/sync_config.json found.".to_string();
             return;
         }
 
-        if let Ok(content) = fs::read_to_string(meta_path) {
-            if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&content) {
-                let total_files = map.len();
-                self.projects = vec![
-                    ProjectInfo {
-                        name: "Lissue (Local)".to_string(),
-                        synced_files: total_files,
-                        pending_files: 0,
+        // 1. メタデータのロード
+        let mut meta_map: HashMap<String, Value> = HashMap::new();
+        if meta_path.exists() {
+            if let Ok(content) = fs::read_to_string(meta_path) {
+                if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&content) {
+                    for (k, v) in map {
+                        meta_map.insert(k, v);
                     }
-                ];
-                self.status_message = format!("Loaded {} metadata sync entries.", total_files);
-            } else {
-                self.status_message = "Failed to parse JSON schema.".to_string();
+                }
             }
-        } else {
-            self.status_message = "Failed to read metadata file.".to_string();
         }
+
+        // 2. 設定ファイルロード ＆ 各プロジェクトのフォルダスキャン
+        let mut detected_projects = Vec::new();
+        if let Ok(content) = fs::read_to_string(config_path) {
+            if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&content) {
+                if let Some(Value::Object(projects_obj)) = map.get("projects") {
+                    for (project_name, _) in projects_obj {
+                        let project_dir = Path::new("docs").join(project_name);
+                        
+                        let mut local_files = Vec::new();
+                        if project_dir.exists() {
+                            let mut dirs_to_visit = vec![project_dir.clone()];
+                            let supported_extensions = [".md", ".pdf", ".docx", ".xlsx", ".xls", ".exls", ".png", ".jpg", ".jpeg"];
+                            
+                            while let Some(dir) = dirs_to_visit.pop() {
+                                if let Ok(entries) = fs::read_dir(dir) {
+                                    for entry in entries.flatten() {
+                                        let path = entry.path();
+                                        if path.is_dir() {
+                                            if let Some(dir_name) = path.file_name().and_then(|n| n.to_str()) {
+                                                if dir_name != ".parsed_cache" {
+                                                    dirs_to_visit.push(path);
+                                                }
+                                            }
+                                        } else if path.is_file() {
+                                            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                                                let dot_ext = format!(".{}", ext.to_lowercase());
+                                                if supported_extensions.contains(&dot_ext.as_str()) {
+                                                    if let Ok(abs_path) = fs::canonicalize(&path) {
+                                                        local_files.push(abs_path.to_string_lossy().to_string());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 同期ステータスカウント
+                        let mut synced_files = 0;
+                        let mut pending_files = 0;
+
+                        for local_file in &local_files {
+                            let mut found = false;
+                            for (meta_path_str, _) in &meta_map {
+                                if let Ok(abs_meta_path) = fs::canonicalize(Path::new(meta_path_str)) {
+                                    if abs_meta_path.to_string_lossy().to_string() == *local_file {
+                                        synced_files += 1;
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if !found {
+                                pending_files += 1;
+                            }
+                        }
+
+                        detected_projects.push(ProjectInfo {
+                            name: project_name.clone(),
+                            synced_files,
+                            pending_files,
+                        });
+                    }
+                }
+            }
+        }
+
+        detected_projects.sort_by(|a, b| a.name.cmp(&b.name));
+        self.projects = detected_projects;
+        self.status_message = format!("Loaded {} projects successfully.", self.projects.len());
     }
 
     pub async fn fetch_redis_stats(&mut self) {
