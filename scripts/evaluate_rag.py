@@ -26,11 +26,7 @@ def get_project_config():
     return {}
 
 def call_gemini_2_5_eval(query, reference, answer):
-    if not GEMINI_API_KEY:
-        print("Error: GEMINI_API_KEY is not configured in environment or .env file.")
-        sys.exit(1)
-        
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"{LITELLM_API_BASE.rstrip('/')}/chat/completions"
     
     prompt = f"""あなたはRAGシステムの精度を評価する厳格な評価者です。
 ユーザーからの質問、提供された模範解答、およびシステムが作成した回答を比較し、以下の定義に従ってシステム回答を「Perfect」「Acceptable」「Missing」「Incorrect」のいずれか1つに分類してください。
@@ -59,33 +55,31 @@ def call_gemini_2_5_eval(query, reference, answer):
 """
 
     payload = {
-        "contents": [
+        "model": "gemini-2.5-flash",
+        "messages": [
             {
-                "parts": [
-                    {"text": prompt}
-                ]
+                "role": "user",
+                "content": prompt
             }
         ],
-        "generationConfig": {
-            "temperature": 0.0,
-            "responseMimeType": "application/json"
-        }
+        "temperature": 0.0,
+        "response_format": {"type": "json_object"}
     }
     
     req = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "Authorization": "Bearer sk-1234"},
         method="POST"
     )
     
     try:
         with urllib.request.urlopen(req) as response:
             res_data = json.loads(response.read().decode("utf-8"))
-            text = res_data["candidates"][0]["content"]["parts"][0]["text"]
+            text = res_data["choices"][0]["message"]["content"]
             return json.loads(text.strip())
     except Exception as e:
-        print(f"Failed to call Gemini 2.5 API for evaluation: {e}")
+        print(f"Failed to call Gemini 2.5 API via LiteLLM for evaluation: {e}")
         return {"evaluation": "Incorrect", "reason": f"Evaluation error: {e}"}
 
 def call_standard_rag(query, config):
