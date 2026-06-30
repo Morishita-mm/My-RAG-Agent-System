@@ -12,3 +12,8 @@ volumes/
 docs/*
 logs/
 .rag-project
+
+
+# Added by cargo
+
+/target
