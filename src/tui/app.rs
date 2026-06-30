@@ -305,6 +305,10 @@ impl App {
             let client = reqwest::Client::new();
             
             // 1. Dify Retrieval API でコンテキストを取得
+            let rerank_enabled = std::env::var("RAGY_RERANK_ENABLE")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+
             let retrieve_url = format!("{}/datasets/{}/retrieve", project.api_base, project.dataset_id);
             let retrieve_res = client.post(&retrieve_url)
                 .header("Authorization", format!("Bearer {}", project.api_key))
@@ -313,7 +317,7 @@ impl App {
                     "retrieval_model": {
                         "search_method": "hybrid_search",
                         "top_k": 3,
-                        "reranking_enable": false,
+                        "reranking_enable": rerank_enabled,
                         "score_threshold_enabled": false
                     }
                 }))
