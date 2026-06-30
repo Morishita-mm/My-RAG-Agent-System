@@ -85,6 +85,15 @@ def get_dify_config_for_current_project(project_name=None):
         }
     return None
 
+# L2正規化（単位ベクトル化）のヘルパー (タスク1/選択肢D)
+def normalize_vector(v):
+    if not v:
+        return []
+    norm = math.sqrt(sum(x * x for x in v))
+    if norm == 0:
+        return v
+    return [x / norm for x in v]
+
 # コサイン類似度の計算（NumPy非依存）
 def cosine_similarity(v1, v2):
     if not v1 or not v2 or len(v1) != len(v2):
@@ -138,6 +147,44 @@ def generate_local_summary(query: str, context: str) -> str:
         logging.error(f"Failed to generate local RAG summary via qwen2.5-coder: {e}")
     return "Error generating local RAG summary."
 
+# HyDE (仮想回答生成・クエリ拡張) 用の仮想回答生成ヘルパー (タスク3/選択肢F)
+def generate_hyde_doc(query: str) -> str:
+    url = f"{LITELLM_BASE}/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {LITELLM_KEY}",
+        "Content-Type": "application/json"
+    }
+    prompt = f"""質問に対して、検索の足しになるような、予想される回答文（仮想ドキュメント）を日本語で1段落（3文程度）で作成してください。
+質問に直接答えるのではなく、回答文の書き出しや背景説明を推測して作成してください。
+例: 「ASCの最新バージョンは何ですか？」 -> 「ASCの最新バージョンは v2.5.0 です。最新バージョンではパフォーマンスの向上やバグ修正が含まれています。」
+
+[質問]
+{query}
+"""
+    payload = {
+        "model": "qwen2.5-coder",
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "temperature": 0.3,
+        "max_tokens": 150
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=25)
+        if response.status_code == 200:
+            res_data = response.json()
+            hyde_doc = res_data["choices"][0]["message"]["content"].strip()
+            logging.info(f"[HyDE Generated] Query: '{query}' -> '{hyde_doc}'")
+            return hyde_doc
+        else:
+            logging.error(f"HyDE generation via LiteLLM returned status {response.status_code}: {response.text}")
+    except Exception as e:
+        logging.error(f"Failed to generate HyDE doc: {e}")
+    return ""
+
 def get_query_embedding(query: str) -> list:
     if not query or not str(query).strip():
         logging.warning("Empty or whitespace-only query passed to get_query_embedding. Returning empty list.")
@@ -173,12 +220,21 @@ def check_semantic_cache(project_name: str, query_vector: list, threshold: float
     project = project_name or 'default'
     pattern = f"mcp_cache:{project}:*"
     
+    # クエリベクトルの正規化 (タスク1/選択肢D)
+    normalized_query = normalize_vector(query_vector)
+    
     try:
         cursor = 0
         while True:
             cursor, keys = redis_client.scan(cursor=cursor, match=pattern, count=100)
-            for key in keys:
-                data_str = redis_client.get(key)
+            if not keys:
+                if cursor == 0:
+                    break
+                continue
+            
+            # MGETで一括取得 (タスク2/選択肢D)
+            values = redis_client.mget(keys)
+            for key, data_str in zip(keys, values):
                 if not data_str:
                     continue
                 try:
@@ -187,7 +243,8 @@ def check_semantic_cache(project_name: str, query_vector: list, threshold: float
                     if not cache_vector:
                         continue
                     
-                    similarity = cosine_similarity(query_vector, cache_vector)
+                    # キャッシュ保存時に正規化済みのため、単なる内積のみでコサイン類似度が得られる (タスク1/選択肢D)
+                    similarity = sum(a * b for a, b in zip(normalized_query, cache_vector))
                     if similarity >= threshold:
                         logging.info(f"[Semantic Cache HIT] Key: {key}, Similarity: {similarity:.4f}")
                         return data.get("result")
@@ -209,9 +266,12 @@ def save_semantic_cache(project_name: str, query: str, query_vector: list, resul
     cache_id = str(uuid.uuid4())
     key = f"mcp_cache:{project}:{cache_id}"
     
+    # 保存時に正規化 (タスク1/選択肢D)
+    normalized_vector = normalize_vector(query_vector)
+    
     data = {
         "query": query,
-        "embedding": query_vector,
+        "embedding": normalized_vector,
         "result": result
     }
     
@@ -284,6 +344,15 @@ def search_dify_knowledge_internal(query: str, project_name: str) -> str:
     if not config:
         return f"Error: No Dify Dataset configuration found. (Current project: {current_proj})"
 
+    # HyDE (仮想回答生成・クエリ拡張) の試験適用 (タスク3/選択肢F)
+    use_hyde = config.get("use_hyde", False) or os.environ.get("DIFY_USE_HYDE", "false").lower() == "true"
+    search_query = query
+    if use_hyde:
+        hyde_doc = generate_hyde_doc(query)
+        if hyde_doc:
+            search_query = f"{query}\n{hyde_doc}"
+            logging.info(f"[HyDE Applied] Expanded search query: '{search_query}'")
+
     api_base = config.get("api_base", "").rstrip('/')
     dataset_api_key = config.get("api_key")  # 従来のデータセットAPIキー
     workflow_api_key = config.get("workflow_api_key") or os.environ.get("DIFY_RAG_WORKFLOW_API_KEY")
@@ -299,7 +368,7 @@ def search_dify_knowledge_internal(query: str, project_name: str) -> str:
         }
         workflow_payload = {
             "inputs": {
-                "query": query
+                "query": search_query
             },
             "response_mode": "blocking",
             "user": "mcp-agent"
@@ -358,7 +427,7 @@ def search_dify_knowledge_internal(query: str, project_name: str) -> str:
         "Content-Type": "application/json"
     }
     payload = {
-        "query": query,
+        "query": search_query,
         "retrieval_model": {
             "search_method": "hybrid_search",
             "top_k": 5,
