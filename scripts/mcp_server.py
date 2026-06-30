@@ -185,6 +185,59 @@ def generate_hyde_doc(query: str) -> str:
         logging.error(f"Failed to generate HyDE doc: {e}")
     return ""
 
+# 対話履歴の文脈を考慮したクエリ書き換え処理 (Query Rewriter)
+def rewrite_query_with_history(query: str, chat_history: list) -> str:
+    if not chat_history:
+        return query
+    
+    # 履歴のテキストフォーマット化
+    history_lines = []
+    for msg in chat_history[-5:]: # 最新の5件に制限してコンテキスト窓を節約
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        history_lines.append(f"{role.capitalize()}: {content}")
+    history_text = "\n".join(history_lines)
+    
+    url = f"{LITELLM_BASE}/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {LITELLM_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    prompt = f"""これまでの会話履歴と最新の質問から、ドキュメント検索（RAG）に最適な、単一の独立した検索クエリを日本語で作成してください。
+質問に指示語（それ、あれ等）や省略された主語がある場合は、会話履歴から文脈を読み取って補完してください。
+出力には、生成された検索クエリのみを含め、挨拶や説明は一切含めないでください。
+
+[会話履歴]
+{history_text}
+
+[最新の質問]
+{query}
+"""
+    payload = {
+        "model": "qwen2.5-coder",
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "temperature": 0.1,
+        "max_tokens": 100
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        if response.status_code == 200:
+            rewritten = response.json()["choices"][0]["message"]["content"].strip()
+            rewritten = rewritten.strip('\'"`').strip()
+            logging.info(f"[Query Rewriter] Original: '{query}' -> Rewritten: '{rewritten}'")
+            return rewritten
+        else:
+            logging.error(f"Query rewriter returned status {response.status_code}: {response.text}")
+    except Exception as e:
+        logging.error(f"Failed to rewrite query: {e}")
+    return query
+
 def get_query_embedding(query: str) -> list:
     if not query or not str(query).strip():
         logging.warning("Empty or whitespace-only query passed to get_query_embedding. Returning empty list.")
@@ -315,25 +368,30 @@ def save_exact_cache(project_name: str, query: str, result: str, ttl: int = 8640
     except Exception as e:
         logging.error(f"Failed to save exact cache: {e}")
 
-def search_dify_knowledge_internal(query: str, project_name: str) -> str:
+def search_dify_knowledge_internal(query: str, project_name: str, chat_history: list = None) -> str:
     current_proj = project_name
+    
+    # 会話履歴がある場合はクエリ書き換えを適用 (Query Rewriter)
+    rewritten_query = query
+    if chat_history:
+        rewritten_query = rewrite_query_with_history(query, chat_history)
     
     # 0. 完全一致キャッシュのチェック (タスク1/選択肢B)
     if redis_enabled:
-        cached_result = check_exact_cache(current_proj, query)
+        cached_result = check_exact_cache(current_proj, rewritten_query)
         if cached_result:
             return cached_result
     
     # 1. セマンティックキャッシュのチェック
     query_vector = None
     if redis_enabled:
-        logging.info(f"Generating embeddings for semantic cache lookup: '{query}'")
-        query_vector = get_query_embedding(query)
+        logging.info(f"Generating embeddings for semantic cache lookup: '{rewritten_query}'")
+        query_vector = get_query_embedding(rewritten_query)
         if query_vector:
             cached_result = check_semantic_cache(current_proj, query_vector)
             if cached_result:
                 # 相互保存：セマンティック側にあれば次回高速化のため完全一致側にも保存
-                save_exact_cache(current_proj, query, cached_result)
+                save_exact_cache(current_proj, rewritten_query, cached_result)
                 return cached_result
 
     # 2. キャッシュミス時の通常検索処理
@@ -344,11 +402,11 @@ def search_dify_knowledge_internal(query: str, project_name: str) -> str:
 
     # HyDE (仮想回答生成・クエリ拡張) の試験適用 (タスク3/選択肢F)
     use_hyde = config.get("use_hyde", False) or os.environ.get("DIFY_USE_HYDE", "false").lower() == "true"
-    search_query = query
+    search_query = rewritten_query
     if use_hyde:
-        hyde_doc = generate_hyde_doc(query)
+        hyde_doc = generate_hyde_doc(rewritten_query)
         if hyde_doc:
-            search_query = f"{query}\n{hyde_doc}"
+            search_query = f"{rewritten_query}\n{hyde_doc}"
             logging.info(f"[HyDE Applied] Expanded search query: '{search_query}'")
 
     api_base = config.get("api_base", "").rstrip('/')
@@ -395,18 +453,18 @@ def search_dify_knowledge_internal(query: str, project_name: str) -> str:
                     
                     # キャッシュの保存
                     if redis_enabled:
-                        save_exact_cache(current_proj, query, final_result)
+                        save_exact_cache(current_proj, rewritten_query, final_result)
                         if query_vector:
-                            save_semantic_cache(current_proj, query, query_vector, final_result)
+                            save_semantic_cache(current_proj, rewritten_query, query_vector, final_result)
                         
                     return final_result
                 elif isinstance(records, str) and records:
                     # テキストとして直接結果が返るパターン
                     final_result = f"[Project: {current_proj or 'default'} (Agentic RAG)] Search Results:\n{records}"
                     if redis_enabled:
-                        save_exact_cache(current_proj, query, final_result)
+                        save_exact_cache(current_proj, rewritten_query, final_result)
                         if query_vector:
-                            save_semantic_cache(current_proj, query, query_vector, final_result)
+                            save_semantic_cache(current_proj, rewritten_query, query_vector, final_result)
                     return final_result
                 else:
                     logging.warning("Dify Workflow completed but returned empty result list. Falling back to Dataset retrieval...")
@@ -441,7 +499,7 @@ def search_dify_knowledge_internal(query: str, project_name: str) -> str:
             res_data = response.json()
             records = res_data.get("records", [])
             if not records:
-                final_result = f"No matching documents found in dataset {dataset_id} for query '{query}'."
+                final_result = f"No matching documents found in dataset {dataset_id} for query '{rewritten_query}'."
             else:
                 # 'Lost in the Middle' 対策のコンテキスト再配置を適用
                 reordered_records = reorder_records(records)
@@ -455,15 +513,15 @@ def search_dify_knowledge_internal(query: str, project_name: str) -> str:
                 
                 # ローカルLLM (qwen2.5-coder) で一次要約回答を生成
                 logging.info("Synthesizing retrieved context using local model qwen2.5-coder...")
-                summary = generate_local_summary(query, raw_context)
+                summary = generate_local_summary(rewritten_query, raw_context)
                 
                 final_result = f"[Project: {current_proj or 'default'} (Local Synthesis)] Answer:\n{summary}"
             
             # キャッシュの保存
             if redis_enabled:
-                save_exact_cache(current_proj, query, final_result)
+                save_exact_cache(current_proj, rewritten_query, final_result)
                 if query_vector:
-                    save_semantic_cache(current_proj, query, query_vector, final_result)
+                    save_semantic_cache(current_proj, rewritten_query, query_vector, final_result)
                 
             return final_result
         else:
@@ -473,15 +531,17 @@ def search_dify_knowledge_internal(query: str, project_name: str) -> str:
 
 @mcp.tool()
 @traceable(run_type="retriever", name="search_dify_knowledge")
-def search_dify_knowledge(query: str) -> str:
+def search_dify_knowledge(query: str, chat_history: list = None) -> str:
     """
     Search documents in Dify RAG knowledge base.
     
     Args:
         query: The search text query.
+        chat_history: Optional list of chat messages representing conversation history.
+                      Each message should be a dict with 'role' and 'content' keys.
     """
     current_proj = get_current_project()
-    return search_dify_knowledge_internal(query, current_proj)
+    return search_dify_knowledge_internal(query, current_proj, chat_history)
 
 if __name__ == "__main__":
     mcp.run()
