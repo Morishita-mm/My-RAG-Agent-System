@@ -51,7 +51,7 @@ def trigger_deploy_script():
             "git pull origin main >> logs/deploy.log 2>&1 && "
             "chmod +x ./ragy >> logs/deploy.log 2>&1 && "
             "xattr -d com.apple.quarantine ./ragy 2>/dev/null || true && "
-            "AUTO_DEPLOY=1 ./ragy restart >> logs/deploy.log 2>&1"
+            "AUTO_DEPLOY=1 bash scripts/ragy_core.sh restart >> logs/deploy.log 2>&1"
             "' >/dev/null 2>&1 &"
         )
         
