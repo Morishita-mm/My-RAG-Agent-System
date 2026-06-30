@@ -24,6 +24,56 @@
       "id": "q5",
       "query": "Ragy のデータベースとして使われているのは、Oracle Database ですか？それとも SQLite ですか？仕様を教えてください。",
       "reference": "Ragy では Weaviate（ベクトルストア）、PostgreSQL（Dify 用メイン DB）、Redis（キャッシュおよび非同期キュー）が使われています。提供されたドキュメントに Oracle Database や SQLite を使用しているという記述はありません。"
+    },
+    {
+      "id": "q6",
+      "query": "Lissue の TUI 画面レイアウトにおいて、画面全体はどの領域に分割されていますか？それぞれの名称と役割を教えてください。",
+      "reference": "ターミナル全体を以下の5つの主要領域に分割して表示します。\n1. Status/Tabs (Top): 現在のフィルタ状態（Open, InProgress, Pending, Close）を表示。`h/l` で切り替え。\n2. Left Pane (Main): タスクの一覧（Task List）またはプロジェクト内ファイルを一覧表示する File Selector を表示。\n3. Right Top Pane: 選択中のタスクの Description を Markdown レンダリングして表示。\n4. Right Bottom Pane: タスクに関連付けられたファイルパスの一覧を表示。\n5. Help/Notification Bar (Bottom): 利用可能なキーガイド、または一時的なエラー/通知メッセージを表示。"
+    },
+    {
+      "id": "q7",
+      "query": "Lissue の TUI モードで、選択されたタスクを担当する（Claimする）キーと、タスクを完了状態にするキーをそれぞれ教えてください。",
+      "reference": "選択されたタスクを担当（Claim）するキーは `c`、タスクを完了状態（Done）にするキーは `d` です。"
+    },
+    {
+      "id": "q8",
+      "query": "Lissue で2026-03-12に行われた JSON 永続化戦略の改善内容と、それによってタスク数1000件時の1件追加（Add）の処理速度がどのように変化したか、具体的なミリ秒を含めて教えてください。",
+      "reference": "JSON 永続化戦略を「1タスク1ファイル方式（Git方式）」へリファクタリングしました。これにより、タスク数1000件時における1件追加（Add）の処理速度が、改善前の `~80.2 ms` から改善後は `~0.37 ms` (約200倍以上の高速化) に短縮され、タスク数に関わらず一定（O(1)）となりました。"
+    },
+    {
+      "id": "q9",
+      "query": "Lissue がサポートしている CLI サブコマンドを 5 つ以上挙げ、それぞれの簡単な役割を説明してください。",
+      "reference": "Lissue は以下の CLI サブコマンド等をサポートしています。\n- `lissue init`: リポジトリの初期化。\n- `lissue add`: タスクの追加。\n- `lissue list`: タスク一覧表示。\n- `lissue claim`: タスクの担当者設定とステータス変更。\n- `lissue attach`: 既存タスクへのファイル関連付け。\n- `lissue context`: AI向けコンテキスト出力。\n- `lissue sync`: JSONとDBの同期。"
+    },
+    {
+      "id": "q10",
+      "query": "Lissue の TUI のデザインコンセプトにおいて、インスピレーションを受けた他ツールと、キー操作の基本体系（何風か）をそれぞれ教えてください。",
+      "reference": "Lazygit にインスピレーションを得た直感的なペイン移動とキー操作を採用しており、`/` キーによる検索や `j/k` による上下移動といった Vim-like（Vim風）の操作体系を特徴としています。"
+    },
+    {
+      "id": "q11",
+      "query": "Lissue のデータモデルにおけるタスク（Task）エンティティが持つ、識別子（ID）に類するフィールド 2 つの名称と、それぞれの役割の違いを説明してください。",
+      "reference": "タスク（Task）エンティティは以下の2つの識別子フィールドを持ちます。\n1. `local_id`: Integer 型。SQLiteの AUTOINCREMENT で採番され、CLIやTUIでの操作指定時に使用されます。\n2. `global_id`: UUID 型。タスクを一意に識別・保証するために使用され、Git同期や共有時に競合を防ぎます。"
+    },
+    {
+      "id": "q12",
+      "query": "Ragy で自動同期のためにフォルダを監視する Watchdog スクリプトのログ出力先と、Webからのデプロイ要求を受け付ける Webhook リスナーのログ出力先をそれぞれ教えてください。",
+      "reference": "Watchdog（フォルダ監視）スクリプトのログは `logs/sync_docs.log` に出力されます。Webhook リスナーのログは `logs/deploy_listener.log` に出力されます。"
+    },
+    {
+      "id": "q13",
+      "query": "Ragy において、マークダウン以外のファイル（PDFやWord、Excel）を同期する際、中間ファイルとしてどこに Markdown テキストを出力・キャッシュしますか？",
+      "reference": "パースされた Markdown テキストは、中間キャッシュディレクトリ `.parsed_cache/` にファイルとして出力・保存されます。"
+    },
+    {
+      "id": "q14",
+      "query": "Lissue では Redis がデータベースとして内蔵されていますか？また、Lissue で Redis を起動するコマンドを教えてください。",
+      "reference": "いいえ、Lissue が使用するデータベースは SQLite のみであり、Redis は内蔵されていません。また、Lissue 自体に Redis を起動するコマンドや設定は存在しません。"
+    },
+    {
+      "id": "q15",
+      "query": "Ragy の常駐監視スクリプトは、AWS S3 へのオブジェクト作成イベント（S3 Event Notifications）を検知して動作しますか？",
+      "reference": "いいえ、Ragy の常駐監視スクリプトはローカルの監視フォルダ（デフォルトは `./docs`）に対するファイル作成・更新・削除などのローカルファイルシステムイベント（Watchdog）を検知して動作します。AWS S3 のイベント通知は使用していません。"
     }
   ]
 }
