@@ -16,6 +16,9 @@ pub enum Commands {
     /// Stop all RAG services
     Stop,
     
+    /// Restart all RAG services
+    Restart,
+    
     /// Show service and document synchronization status
     Status {
         /// Show detailed Docker container list

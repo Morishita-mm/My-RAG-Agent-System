@@ -27,9 +27,15 @@ fn check_process(name: &str) -> bool {
 }
 
 
-fn run_shell_command(cmd: &str, args: &[&str]) -> io::Result<ExitStatus> {
-    Command::new(cmd)
-        .args(args)
+
+fn run_core_command(subcmd: &str, args: &[&str]) -> io::Result<ExitStatus> {
+    let mut cmd_args = vec![subcmd];
+    for arg in args {
+        cmd_args.push(arg);
+    }
+    Command::new("bash")
+        .arg("scripts/ragy_core.sh")
+        .args(&cmd_args)
         .status()
 }
 
@@ -39,22 +45,13 @@ async fn main() -> io::Result<()> {
 
     match args.command {
         Commands::Start => {
-            println!("Starting RAG Services via Docker Compose...");
-            match run_shell_command("docker", &["compose", "up", "-d"]) {
-                Ok(status) if status.success() => {
-                    println!("Services started successfully.");
-                }
-                _ => eprintln!("Failed to start services via Docker Compose."),
-            }
+            let _ = run_core_command("start", &[]);
         }
         Commands::Stop => {
-            println!("Stopping RAG Services...");
-            match run_shell_command("docker", &["compose", "down"]) {
-                Ok(status) if status.success() => {
-                    println!("Services stopped successfully.");
-                }
-                _ => eprintln!("Failed to stop services."),
-            }
+            let _ = run_core_command("stop", &[]);
+        }
+        Commands::Restart => {
+            let _ = run_core_command("restart", &[]);
         }
         Commands::Status { detail, docs } => {
             println!("=== RAG System Status ===");
@@ -94,25 +91,44 @@ async fn main() -> io::Result<()> {
             };
             println!("Sync Watchdog   : {}", watchdog_status);
 
+            let listener_status = if check_process("deploy_listener.py") {
+                "RUNNING"
+            } else {
+                "STOPPED"
+            };
+            println!("Deploy Listener : {}", listener_status);
+
+            let worker_status = if check_process("worker.py") {
+                "RUNNING"
+            } else {
+                "STOPPED"
+            };
+            println!("Queue Worker    : {}", worker_status);
+
+            let ngrok_status = if check_process("ngrok http") {
+                "RUNNING"
+            } else {
+                "STOPPED"
+            };
+            println!("Ngrok Tunnel    : {}", ngrok_status);
+
             if detail {
                 println!("\n=== Detailed Docker Containers ===");
-                let _ = run_shell_command("docker", &["compose", "ps"]);
+                let mut cmd = Command::new("docker");
+                cmd.args(&["compose", "ps"]);
+                let _ = cmd.status();
             }
 
             let mut sync_args = vec!["scripts/sync_status.py"];
             if docs {
                 sync_args.push("--docs");
             }
-            let _ = run_shell_command("python3", &sync_args);
+            let mut cmd = Command::new("python3");
+            cmd.args(&sync_args);
+            let _ = cmd.status();
         }
         Commands::Sync => {
-            println!("Triggering document synchronization...");
-            match run_shell_command("python3", &["scripts/sync_docs.py"]) {
-                Ok(status) if status.success() => {
-                    println!("Synchronization complete.");
-                }
-                _ => eprintln!("Synchronization failed."),
-            }
+            let _ = run_core_command("sync", &[]);
         }
         Commands::Tui => {
             if let Err(e) = tui::run_tui().await {

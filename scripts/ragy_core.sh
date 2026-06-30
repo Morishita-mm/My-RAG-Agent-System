@@ -1,0 +1,518 @@
+#!/bin/bash
+# ==================================================================
+# ragy - Local RAG & Agentic Environment Control CLI
+# ==================================================================
+
+PROJECT_DIR="/Volumes/ORICO/src/github.com/Morishita-mm/My-RAG-Agent-System"
+SYNC_LOG="$PROJECT_DIR/logs/sync_docs.log"
+DEPLOY_LOG="$PROJECT_DIR/logs/deploy_listener.log"
+
+# Detect correct Python interpreter with required dependencies
+PYTHON_CMD="python3"
+for py in "/Users/mzk/.local/share/mise/installs/python/3.12.12/bin/python3" "python3" "python"; do
+  if $py -c "import requests, watchdog" >/dev/null 2>&1; then
+    PYTHON_CMD=$py
+    break
+  fi
+done
+
+show_usage() {
+  echo "Usage: ragy [start|stop|status|restart|init|sync]"
+  echo ""
+  echo "Commands:"
+  echo "  start    Start all services (Ollama, Docker Compose, Document Watchdog, Queue Worker)"
+  echo "  stop     Stop all services (Docker Compose, Document Watchdog, Queue Worker)"
+  echo "  restart  Restart all services"
+  echo "  status   Show current status of all running services"
+  echo "  init     Initialize current directory for RAG (Creates dataset & symlink)"
+  echo "  sync     Sync all markdown documents in ./docs to Dify dataset"
+}
+
+start_services() {
+  cd "$PROJECT_DIR" || exit 1
+  echo "=== [1/5] Checking and Starting Ollama ==="
+  if ! curl -s http://127.0.0.1:11434 >/dev/null; then
+    echo "Ollama is not running. Starting Ollama with OLLAMA_HOST=0.0.0.0..."
+    OLLAMA_HOST=0.0.0.0 nohup ollama serve >/dev/null 2>&1 &
+
+    for i in {1..15}; do
+      if curl -s http://127.0.0.1:11434 >/dev/null; then
+        echo "Ollama started successfully."
+        break
+      fi
+      echo "Waiting for Ollama..."
+      sleep 1
+    done
+  else
+    echo "Ollama is already running."
+  fi
+
+  echo "=== [2/5] Checking Docker Runtime ==="
+  if ! docker info >/dev/null 2>&1; then
+    echo "Docker is not running. Starting OrbStack..."
+    open -a OrbStack
+    while ! docker info >/dev/null 2>&1; do
+      echo "Waiting for Docker daemon..."
+      sleep 2
+    done
+    echo "Docker is ready."
+  else
+    echo "Docker is already running."
+  fi
+
+  echo "=== [3/5] Starting Docker Containers ==="
+  docker compose up -d
+
+  echo "=== [4/5] Starting Document Sync Script ==="
+  SYNC_PID=$(pgrep -f "sync_docs.py")
+  if [ -n "$SYNC_PID" ]; then
+    echo "Stopping existing sync_docs.py (PID: $SYNC_PID)..."
+    kill "$SYNC_PID"
+    sleep 1
+  fi
+  nohup "$PYTHON_CMD" scripts/sync_docs.py >"$SYNC_LOG" 2>&1 &
+  echo "sync_docs.py started in background (Logging to $SYNC_LOG)."
+
+  echo "=== [5/5] Starting Deploy Webhook Listener ==="
+  if [ "$AUTO_DEPLOY" = "1" ]; then
+    echo "Auto-deploy mode detected. Skipping deploy_listener.py stop."
+  elif [ -f "$PROJECT_DIR/logs/deploy_listener.pid" ]; then
+    DEPLOY_PID=$(cat "$PROJECT_DIR/logs/deploy_listener.pid")
+    if ps -p "$DEPLOY_PID" >/dev/null 2>&1; then
+      echo "Stopping existing deploy_listener.py (PID: $DEPLOY_PID)..."
+      kill "$DEPLOY_PID"
+      for i in {1..10}; do
+        if ! ps -p "$DEPLOY_PID" >/dev/null 2>&1; then
+          break
+        fi
+        echo "Waiting for old deploy_listener to exit..."
+        sleep 1
+      done
+    fi
+    rm -f "$PROJECT_DIR/logs/deploy_listener.pid"
+  else
+    DEPLOY_PID=$(pgrep -f "scripts/deploy_listener.py")
+    if [ -n "$DEPLOY_PID" ]; then
+      echo "Stopping existing deploy_listener.py (PID: $DEPLOY_PID)..."
+      echo "$DEPLOY_PID" | xargs kill -9
+      for i in {1..10}; do
+        STILL_RUNNING=$(pgrep -f "scripts/deploy_listener.py")
+        if [ -z "$STILL_RUNNING" ]; then
+          break
+        fi
+        sleep 1
+      done
+    fi
+  fi
+  nohup "$PYTHON_CMD" scripts/deploy_listener.py >"$DEPLOY_LOG" 2>&1 &
+  echo "deploy_listener.py started in background (Logging to $DEPLOY_LOG)."
+
+  echo "=== [6/7] Starting Async Queue Worker ==="
+  if [ -f "$PROJECT_DIR/logs/worker.pid" ]; then
+    WORKER_PID=$(cat "$PROJECT_DIR/logs/worker.pid")
+    if ps -p "$WORKER_PID" >/dev/null 2>&1; then
+      echo "Stopping existing worker.py (PID: $WORKER_PID)..."
+      kill "$WORKER_PID"
+      sleep 1
+    fi
+    rm -f "$PROJECT_DIR/logs/worker.pid"
+  fi
+  nohup "$PYTHON_CMD" scripts/worker.py >"$PROJECT_DIR/logs/worker.log" 2>&1 &
+  echo "worker.py started in background (Logging to $PROJECT_DIR/logs/worker.log)."
+
+  # --- Ngrokの起動のみを純粋に追加 ---
+  echo "=== [7/7] Starting Ngrok Tunnel ==="
+
+  # init_projectで実績のある抽出ロジックをそのまま流用
+  NGROK_DOMAIN=""
+  if [ -f "$PROJECT_DIR/.env" ]; then
+    local env_key=$(grep '^NGROK_DOMAIN=' "$PROJECT_DIR/.env" | cut -d '=' -f2- | tr -d '"' | tr -d "'")
+    if [ -n "$env_key" ]; then
+      NGROK_DOMAIN="$env_key"
+    fi
+  fi
+
+  if command -v ngrok >/dev/null 2>&1; then
+    if [ -n "$NGROK_DOMAIN" ]; then
+      echo "Starting ngrok tunnel with static domain: $NGROK_DOMAIN"
+      nohup ngrok http --domain="$NGROK_DOMAIN" 8000 >/dev/null 2>&1 &
+      echo "Webhook URL: https://$NGROK_DOMAIN/webhook"
+    else
+      echo "Starting ngrok tunnel with random domain..."
+      nohup ngrok http 8000 >/dev/null 2>&1 &
+    fi
+  else
+    echo "Warning: ngrok is not installed. Webhook tunnel will not be opened."
+  fi
+
+  echo ""
+  echo "Successfully started all RAG services!"
+}
+
+stop_services() {
+  cd "$PROJECT_DIR" || exit 1
+  echo "=== Stopping Document Sync Script ==="
+  SYNC_PID=$(pgrep -f "sync_docs.py")
+  if [ -n "$SYNC_PID" ]; then
+    echo "Killing sync_docs.py (PID: $SYNC_PID)..."
+    kill "$SYNC_PID"
+  else
+    echo "sync_docs.py is not running."
+  fi
+
+  echo "=== Stopping Deploy Webhook Listener ==="
+  if [ "$AUTO_DEPLOY" = "1" ]; then
+    echo "Auto-deploy mode detected. Skipping deploy_listener.py kill to prevent process tree termination."
+  elif [ -f "$PROJECT_DIR/logs/deploy_listener.pid" ]; then
+    DEPLOY_PID=$(cat "$PROJECT_DIR/logs/deploy_listener.pid")
+    if ps -p "$DEPLOY_PID" >/dev/null 2>&1; then
+      echo "Killing deploy_listener.py (PID: $DEPLOY_PID)..."
+      kill "$DEPLOY_PID"
+      for i in {1..10}; do
+        if ! ps -p "$DEPLOY_PID" >/dev/null 2>&1; then
+          break
+        fi
+        echo "Waiting for deploy_listener to exit..."
+        sleep 1
+      done
+    else
+      echo "deploy_listener.py (PID: $DEPLOY_PID) in PID file is not running."
+    fi
+    rm -f "$PROJECT_DIR/logs/deploy_listener.pid"
+  else
+    DEPLOY_PID=$(pgrep -f "scripts/deploy_listener.py" | head -n 1)
+    if [ -n "$DEPLOY_PID" ]; then
+      echo "Killing deploy_listener.py (PID: $DEPLOY_PID)..."
+      kill "$DEPLOY_PID"
+      for i in {1..10}; do
+        if ! ps -p "$DEPLOY_PID" >/dev/null 2>&1; then
+          break
+        fi
+        sleep 1
+      done
+    else
+      echo "deploy_listener.py is not running."
+    fi
+  fi
+
+  echo "=== Stopping Async Queue Worker ==="
+  if [ -f "$PROJECT_DIR/logs/worker.pid" ]; then
+    WORKER_PID=$(cat "$PROJECT_DIR/logs/worker.pid")
+    if ps -p "$WORKER_PID" >/dev/null 2>&1; then
+      echo "Killing worker.py (PID: $WORKER_PID)..."
+      kill "$WORKER_PID"
+      for i in {1..10}; do
+        if ! ps -p "$WORKER_PID" >/dev/null 2>&1; then
+          break
+        fi
+        echo "Waiting for worker to exit..."
+        sleep 1
+      done
+    else
+      echo "worker.py (PID: $WORKER_PID) in PID file is not running."
+    fi
+    rm -f "$PROJECT_DIR/logs/worker.pid"
+  else
+    WORKER_PID=$(pgrep -f "scripts/worker.py" | head -n 1)
+    if [ -n "$WORKER_PID" ]; then
+      echo "Killing worker.py (PID: $WORKER_PID)..."
+      kill "$WORKER_PID"
+    else
+      echo "worker.py is not running."
+    fi
+  fi
+
+  # --- Ngrokの停止のみを純粋に追加 ---
+  echo "=== Stopping Ngrok Tunnel ==="
+  if pgrep -f "ngrok http" >/dev/null 2>&1; then
+    echo "Killing ngrok tunnel..."
+    pkill -f "ngrok http" || true
+  else
+    echo "ngrok is not running."
+  fi
+
+  echo "=== Stopping Docker Containers ==="
+  docker compose down
+
+  echo ""
+  echo "Successfully stopped RAG services."
+}
+
+show_status() {
+  cd "$PROJECT_DIR" || exit 1
+  echo "=== RAG System Status ==="
+
+  # 1. Ollama status
+  if curl -s http://127.0.0.1:11434 >/dev/null; then
+    echo "Ollama          : RUNNING (127.0.0.1:11434)"
+  else
+    echo "Ollama          : STOPPED"
+  fi
+
+  # 2. Watchdog sync_docs status
+  SYNC_PID=$(pgrep -f "sync_docs.py")
+  if [ -n "$SYNC_PID" ]; then
+    echo "Sync Watchdog   : RUNNING (PID: $SYNC_PID)"
+  else
+    echo "Sync Watchdog   : STOPPED"
+  fi
+
+  # 3. Deploy Webhook Listener status
+  if [ -f "$PROJECT_DIR/logs/deploy_listener.pid" ]; then
+    DEPLOY_PID=$(cat "$PROJECT_DIR/logs/deploy_listener.pid")
+    if ps -p "$DEPLOY_PID" >/dev/null 2>&1; then
+      echo "Deploy Webhook  : RUNNING (PID: $DEPLOY_PID, Port: 8000)"
+    else
+      echo "Deploy Webhook  : STOPPED (Stale PID file)"
+    fi
+  else
+    DEPLOY_PID=$(pgrep -f "scripts/deploy_listener.py" | head -n 1)
+    if [ -n "$DEPLOY_PID" ]; then
+      echo "Deploy Webhook  : RUNNING (PID: $DEPLOY_PID, Port: 8000)"
+    else
+      echo "Deploy Webhook  : STOPPED"
+    fi
+  fi
+
+  # 3.5. Async Queue Worker status
+  if [ -f "$PROJECT_DIR/logs/worker.pid" ]; then
+    WORKER_PID=$(cat "$PROJECT_DIR/logs/worker.pid")
+    if ps -p "$WORKER_PID" >/dev/null 2>&1; then
+      echo "Queue Worker    : RUNNING (PID: $WORKER_PID)"
+    else
+      echo "Queue Worker    : STOPPED (Stale PID file)"
+    fi
+  else
+    WORKER_PID=$(pgrep -f "scripts/worker.py" | head -n 1)
+    if [ -n "$WORKER_PID" ]; then
+      echo "Queue Worker    : RUNNING (PID: $WORKER_PID)"
+    else
+      echo "Queue Worker    : STOPPED"
+    fi
+  fi
+
+  # 4. Ngrok status
+  if pgrep -f "ngrok http" >/dev/null 2>&1; then
+    echo "Ngrok Tunnel    : RUNNING"
+  else
+    echo "Ngrok Tunnel    : STOPPED"
+  fi
+
+  # 5. Docker Containers status
+  echo "Docker Services :"
+  docker compose ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
+
+  # 6. Document Sync Status (Task 4)
+  "$PYTHON_CMD" scripts/sync_status.py
+}
+
+init_project() {
+  local dataset_id=$1
+  local target_dir=$(pwd)
+  local project_name
+
+  # 1. カレントディレクトリが所属している Git リポジトリ名
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    project_name=$(basename "$(git rev-parse --show-toplevel)")
+  # 2. カレントディレクトリ名
+  else
+    project_name=$(basename "$target_dir")
+  fi
+
+  local rag_docs_dir="$PROJECT_DIR/docs/$project_name"
+  local config_file="$PROJECT_DIR/docs/sync_config.json"
+
+  # RAG環境の .env から必要な環境変数だけを安全にロード
+  if [ -f "$PROJECT_DIR/.env" ]; then
+    local env_key=$(grep '^DIFY_DATASET_API_KEY=' "$PROJECT_DIR/.env" | cut -d '=' -f2- | tr -d '"' | tr -d "'")
+    if [ -n "$env_key" ]; then
+      export DIFY_DATASET_API_KEY="$env_key"
+    fi
+  fi
+
+  local api_base="${DIFY_API_BASE:-http://localhost:8080/v1}"
+  local api_key="$DIFY_DATASET_API_KEY"
+
+  if [ -z "$api_key" ]; then
+    echo "Error: DIFY_DATASET_API_KEY is not set in environment or .env file."
+    exit 1
+  fi
+
+  echo "=== Initializing Project: $project_name ==="
+
+  # 1. Dataset ID が未指定なら Dify API で新規作成
+  if [ -z "$dataset_id" ]; then
+    echo "Dataset ID not provided. Creating a new dataset '$project_name' in Dify..."
+
+    if ! curl -s --connect-timeout 3 "$api_base/datasets" -H "Authorization: Bearer $api_key" >/dev/null; then
+      echo "Error: Cannot connect to Dify API. Please verify that RAG services are running ('ragy start')."
+      exit 1
+    fi
+
+    local response=$(curl -s -X POST "$api_base/datasets" \
+      -H "Authorization: Bearer $api_key" \
+      -H "Content-Type: application/json" \
+      -d "{\"name\": \"$project_name\"}")
+
+    dataset_id=$(echo "$response" | jq -r '.id')
+
+    if [ "$dataset_id" == "null" ] || [ -z "$dataset_id" ]; then
+      echo "Error: Failed to create dataset via Dify API."
+      echo "API Response: $response"
+      exit 1
+    fi
+    echo "Successfully created dataset in Dify. ID: $dataset_id"
+  else
+    echo "Using provided Dataset ID: $dataset_id"
+  fi
+
+  # 2. RAGシステム側の実体ディレクトリ作成
+  if [ ! -d "$rag_docs_dir" ]; then
+    mkdir -p "$rag_docs_dir"
+    echo "Created physical directory: $rag_docs_dir"
+  fi
+
+  if [ ! -e "$target_dir/docs" ] && [ ! -L "$target_dir/docs" ]; then
+    ln -s "$rag_docs_dir" "$target_dir/docs"
+    echo "Created symbolic link './docs' pointing to RAG system."
+  else
+    echo "Warning: './docs' (or a broken link) already exists in the current directory. Skipping link creation."
+  fi
+
+  echo "$project_name" >.rag-project
+  echo "Created .rag-project for integration."
+
+  # 4. sync_config.json の自動更新
+  if [ ! -f "$config_file" ]; then
+    echo '{"projects": {}}' >"$config_file"
+  fi
+
+  jq --arg proj "$project_name" \
+    --arg did "$dataset_id" \
+    --arg key "$api_key" \
+    --arg base "$api_base" \
+    '.projects[$proj] = {"dataset_id": $did, "api_key": $key, "api_base": $base}' \
+    "$config_file" >"${config_file}.tmp" && mv "${config_file}.tmp" "$config_file"
+
+  echo "Successfully registered $project_name to sync_config.json."
+
+  # 5. テンプレート展開処理（既存ロジック温存）
+  local template_dir="$PROJECT_DIR/templates"
+  export MODEL_NAME="openai/gemini-3.5-flash"
+  export API_BASE="http://localhost:4000/v1"
+  export API_KEY="sk-1234"
+
+  apply_template() {
+    local src=$1
+    local dst=$2
+    if command -v envsubst >/dev/null 2>&1; then
+      envsubst <"$src" >"$dst"
+    else
+      sed -e "s|\${MODEL_NAME}|$MODEL_NAME|g" -e "s|\${API_BASE}|$API_BASE|g" -e "s|\${API_KEY}|$API_KEY|g" "$src" >"$dst"
+    fi
+  }
+
+  if [ ! -f ".aider.conf.yml" ]; then
+    apply_template "$template_dir/aider.conf.yml" ".aider.conf.yml"
+    echo "Created .aider.conf.yml"
+  fi
+
+  mkdir -p .continue
+  if [ ! -f ".continue/config.json" ]; then
+    apply_template "$template_dir/continue_config.json" ".continue/config.json"
+    echo "Created .continue/config.json"
+  fi
+
+  echo "Initialization complete!"
+}
+
+sync_project() {
+  local target_dir=$(pwd)
+  local project_name
+  local config_file="$PROJECT_DIR/docs/sync_config.json"
+
+  # 1. 最優先：親ディレクトリを遡って .rag-project ファイルを探索・読込
+  local curr=$target_dir
+  while [ "$curr" != "/" ] && [ "$curr" != "." ]; do
+    if [ -f "$curr/.rag-project" ]; then
+      project_name=$(cat "$curr/.rag-project" | tr -d '\n' | tr -d '\r')
+      break
+    fi
+    curr=$(dirname "$curr")
+  done
+
+  # 2. フォールバック解決
+  if [ -z "$project_name" ]; then
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      project_name=$(basename "$(git rev-parse --show-toplevel)")
+    else
+      project_name=$(basename "$target_dir")
+    fi
+  fi
+
+  echo "=== Syncing Project: $project_name ==="
+
+  # 1. sync_config.json の存在確認
+  if [ ! -f "$config_file" ]; then
+    echo "Error: sync_config.json not found at $config_file."
+    echo "Please run 'ragy init' first."
+    exit 1
+  fi
+
+  # 2. sync_config.json に登録されているか確認
+  if command -v jq >/dev/null 2>&1; then
+    local registered=$(jq -r --arg proj "$project_name" '.projects[$proj]' "$config_file")
+    if [ "$registered" == "null" ] || [ -z "$registered" ]; then
+      echo "Error: Project '$project_name' is not registered in sync_config.json."
+      echo "Please run 'ragy init' in this directory first."
+      exit 1
+    fi
+  else
+    # jqがない場合の簡易フォールバック判定
+    if ! grep -q "\"$project_name\"" "$config_file"; then
+      echo "Error: Project '$project_name' is not registered in sync_config.json."
+      echo "Please run 'ragy init' in this directory first."
+      exit 1
+    fi
+  fi
+
+  # 3. python3 scripts/sync_docs.py --sync-project $project_name を実行
+  cd "$PROJECT_DIR" || exit 1
+  "$PYTHON_CMD" scripts/sync_docs.py --sync-project "$project_name"
+  local status=$?
+
+  cd "$target_dir" || exit 1
+  if [ $status -eq 0 ]; then
+    echo "=== Sync Complete for $project_name ==="
+  else
+    echo "=== Sync Failed for $project_name ==="
+    exit 1
+  fi
+}
+
+case "$1" in
+start)
+  start_services
+  ;;
+stop)
+  stop_services
+  ;;
+restart)
+  stop_services
+  sleep 2
+  start_services
+  ;;
+status)
+  show_status
+  ;;
+init)
+  init_project "$2"
+  ;;
+sync)
+  sync_project
+  ;;
+*)
+  show_usage
+  exit 1
+  ;;
+esac
