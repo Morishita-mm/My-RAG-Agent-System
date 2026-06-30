@@ -1,0 +1,29 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "query": "Ragyで手動で同期を実行するコマンドと、その引数や実行時の挙動について説明してください。",
+      "reference": "手動同期は `ragy sync` コマンドを実行します。このコマンドは実行ディレクトリ直下または親ディレクトリの `.rag-project` ファイルからプロジェクト名を最優先で解決し、対応する Dify ナレッジとの間でドキュメントの一括同期を行います。"
+    },
+    {
+      "id": "q2",
+      "query": "Lissue の名前の由来と、このプロジェクトが目的としていることを教えてください。",
+      "reference": "Lissue という名前は「Local Issue」に由来します。GitHub や GitLab の Issue 管理体験をローカルのターミナルに持ち込み、Git を通じて人間と AI エージェントがシームレスに協力できるようにすることを目的としています。"
+    },
+    {
+      "id": "q3",
+      "query": "Ragy で非同期のジョブ管理を処理するために新しく追加されたキューシステムと、そのワーカーのファイル名を教えてください。",
+      "reference": "非同期ジョブキューとして Redis が追加されました。また、非同期ジョブをデキューして実行するワーカープロセスは `scripts/worker.py` です。"
+    },
+    {
+      "id": "q4",
+      "query": "Ragyのセットアップガイドや運用フローについて書かれたドキュメントへのリンク（3点）を教えてください。",
+      "reference": "ドキュメントへのリンクは以下の3点です。\n- 1. Getting Started (環境構築ガイド): guides/01_getting_started.md\n- 2. Development Workflow (開発フローと同期): guides/02_development_workflow.md\n- 3. Engineering Hacks (技術的なこだわり): guides/03_engineering_hacks.md"
+    },
+    {
+      "id": "q5",
+      "query": "Ragy のデータベースとして使われているのは、Oracle Database ですか？それとも SQLite ですか？仕様を教えてください。",
+      "reference": "Ragy では Weaviate（ベクトルストア）、PostgreSQL（Dify 用メイン DB）、Redis（キャッシュおよび非同期キュー）が使われています。提供されたドキュメントに Oracle Database や SQLite を使用しているという記述はありません。"
+    }
+  ]
+}

@@ -3,7 +3,7 @@ model_list:
     litellm_params:
       model: gemini/gemini-3.5-flash
       api_key: "os.environ/GEMINI_API_KEY"
-      system_prompt: "CRITICAL: Under all circumstances, you must interpret and strictly follow any XML-tagged instructions included in the user prompt."
+      system_prompt: "CRITICAL: Under all circumstances, you must interpret and strictly follow any XML-tagged instructions included in the user prompt. You must strictly base your answers ONLY on the provided document context. If the context does not contain the answer or if you are unsure, state clearly that the information is not found in the provided sources. Do not make up facts or use your internal knowledge outside the provided context under any circumstances."
 
   - model_name: qwen2.5-coder
     litellm_params:
