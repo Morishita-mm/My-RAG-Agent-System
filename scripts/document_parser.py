@@ -184,7 +184,7 @@ def convert_document_to_markdown(file_path: str) -> str:
         return parse_pdf_to_markdown(file_path)
     elif ext == '.docx':
         return parse_docx_to_markdown(file_path)
-    elif ext in ['.xlsx', '.xls']:
+    elif ext in ['.xlsx', '.xls', '.exls']:
         return parse_excel_to_markdown(file_path)
     elif ext == '.md':
         try:

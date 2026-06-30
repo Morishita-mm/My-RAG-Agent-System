@@ -425,8 +425,27 @@ init_project() {
 
 sync_project() {
   local target_dir=$(pwd)
-  local project_name=$(basename "$target_dir")
+  local project_name
   local config_file="$PROJECT_DIR/docs/sync_config.json"
+
+  # 1. 最優先：親ディレクトリを遡って .rag-project ファイルを探索・読込
+  local curr=$target_dir
+  while [ "$curr" != "/" ] && [ "$curr" != "." ]; do
+    if [ -f "$curr/.rag-project" ]; then
+      project_name=$(cat "$curr/.rag-project" | tr -d '\n' | tr -d '\r')
+      break
+    fi
+    curr=$(dirname "$curr")
+  done
+
+  # 2. フォールバック解決
+  if [ -z "$project_name" ]; then
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      project_name=$(basename "$(git rev-parse --show-toplevel)")
+    else
+      project_name=$(basename "$target_dir")
+    fi
+  fi
 
   echo "=== Syncing Project: $project_name ==="
 
