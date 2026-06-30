@@ -32,8 +32,26 @@ pub struct ProjectInfo {
     pub pending_files: usize,
 }
 
+use std::path::PathBuf;
+
+fn get_project_root() -> PathBuf {
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Ok(real_path) = std::fs::canonicalize(exe_path) {
+            let mut current = real_path.parent();
+            while let Some(path) = current {
+                if path.join("Cargo.toml").exists() {
+                    return path.to_path_buf();
+                }
+                current = path.parent();
+            }
+        }
+    }
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
 #[allow(dead_code)]
 pub struct App {
+    pub project_root: PathBuf,
     pub projects: Vec<ProjectInfo>,
     pub selected_project_index: usize,
     pub exact_cache_count: usize,
@@ -56,7 +74,9 @@ pub struct App {
 
 impl App {
     pub fn new() -> Self {
+        let project_root = get_project_root();
         Self {
+            project_root,
             projects: Vec::new(),
             selected_project_index: 0,
             exact_cache_count: 0,
@@ -89,18 +109,18 @@ impl App {
     }
 
     pub fn load_project_metadata(&mut self) {
-        let config_path = Path::new("docs/sync_config.json");
-        let meta_path = Path::new(".dify_sync_meta.json");
+        let config_path = self.project_root.join("docs/sync_config.json");
+        let meta_path = self.project_root.join(".dify_sync_meta.json");
 
         if !config_path.exists() {
-            self.status_message = "No config docs/sync_config.json found.".to_string();
+            self.status_message = format!("No config {:?} found.", config_path);
             return;
         }
 
         // 1. メタデータのロード
         let mut meta_map: HashMap<String, Value> = HashMap::new();
         if meta_path.exists() {
-            if let Ok(content) = fs::read_to_string(meta_path) {
+            if let Ok(content) = fs::read_to_string(&meta_path) {
                 if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&content) {
                     for (k, v) in map {
                         meta_map.insert(k, v);
@@ -111,14 +131,14 @@ impl App {
 
         // 2. 設定ファイルロード ＆ 各プロジェクトのフォルダスキャン
         let mut detected_projects = Vec::new();
-        if let Ok(content) = fs::read_to_string(config_path) {
+        if let Ok(content) = fs::read_to_string(&config_path) {
             if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&content) {
                 if let Some(Value::Object(projects_obj)) = map.get("projects") {
                     for (project_name, proj_val) in projects_obj {
                         let dataset_id = proj_val.get("dataset_id").and_then(|d| d.as_str()).unwrap_or("").to_string();
                         let api_key = proj_val.get("api_key").and_then(|k| k.as_str()).unwrap_or("").to_string();
                         let api_base = proj_val.get("api_base").and_then(|b| b.as_str()).unwrap_or("").to_string();
-                        let project_dir = Path::new("docs").join(project_name);
+                        let project_dir = self.project_root.join("docs").join(project_name);
                         
                         let mut local_files = Vec::new();
                         if project_dir.exists() {
@@ -157,7 +177,7 @@ impl App {
                         for local_file in &local_files {
                             let mut found = false;
                             for (meta_path_str, _) in &meta_map {
-                                if let Ok(abs_meta_path) = fs::canonicalize(Path::new(meta_path_str)) {
+                                if let Ok(abs_meta_path) = fs::canonicalize(self.project_root.join(meta_path_str)) {
                                     if abs_meta_path.to_string_lossy().to_string() == *local_file {
                                         synced_files += 1;
                                         found = true;
@@ -266,29 +286,29 @@ impl App {
             .await;
             
         // 2. sync_config.json からプロジェクトを削除
-        let config_path = Path::new("docs/sync_config.json");
+        let config_path = self.project_root.join("docs/sync_config.json");
         if config_path.exists() {
-            if let Ok(content) = fs::read_to_string(config_path) {
+            if let Ok(content) = fs::read_to_string(&config_path) {
                 if let Ok(mut val) = serde_json::from_str::<Value>(&content) {
                     if let Some(projects_obj) = val.get_mut("projects").and_then(|p| p.as_object_mut()) {
                         projects_obj.remove(&project.name);
                         let updated_json = serde_json::to_string_pretty(&val)?;
-                        fs::write(config_path, updated_json)?;
+                        fs::write(&config_path, updated_json)?;
                     }
                 }
             }
         }
         
         // 3. 同期メタデータ (.dify_sync_meta.json) からそのプロジェクト関連ファイルを削除
-        let meta_path = Path::new(".dify_sync_meta.json");
+        let meta_path = self.project_root.join(".dify_sync_meta.json");
         if meta_path.exists() {
-            if let Ok(content) = fs::read_to_string(meta_path) {
+            if let Ok(content) = fs::read_to_string(&meta_path) {
                 if let Ok(mut val) = serde_json::from_str::<Value>(&content) {
                     if let Some(meta_obj) = val.as_object_mut() {
                         let project_prefix = format!("docs/{}", project.name);
                         meta_obj.retain(|k, _| !k.starts_with(&project_prefix));
                         let updated_json = serde_json::to_string_pretty(&val)?;
-                        fs::write(meta_path, updated_json)?;
+                        fs::write(&meta_path, updated_json)?;
                     }
                 }
             }

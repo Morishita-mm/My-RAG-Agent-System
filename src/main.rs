@@ -28,13 +28,34 @@ fn check_process(name: &str) -> bool {
 
 
 
-fn run_core_command(subcmd: &str, args: &[&str]) -> io::Result<ExitStatus> {
-    let mut cmd_args = vec![subcmd];
-    for arg in args {
-        cmd_args.push(arg);
+use std::path::PathBuf;
+
+fn get_project_root() -> PathBuf {
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Ok(real_path) = std::fs::canonicalize(exe_path) {
+            let mut current = real_path.parent();
+            while let Some(path) = current {
+                if path.join("Cargo.toml").exists() {
+                    return path.to_path_buf();
+                }
+                current = path.parent();
+            }
+        }
     }
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn run_core_command(subcmd: &str, args: &[&str]) -> io::Result<ExitStatus> {
+    let project_root = get_project_root();
+    let script_path = project_root.join("scripts/ragy_core.sh");
+    
+    let mut cmd_args = vec![script_path.to_string_lossy().to_string()];
+    cmd_args.push(subcmd.to_string());
+    for arg in args {
+        cmd_args.push(arg.to_string());
+    }
+    
     Command::new("bash")
-        .arg("scripts/ragy_core.sh")
         .args(&cmd_args)
         .status()
 }
@@ -119,9 +140,12 @@ async fn main() -> io::Result<()> {
                 let _ = cmd.status();
             }
 
-            let mut sync_args = vec!["scripts/sync_status.py"];
+            let project_root = get_project_root();
+            let sync_script = project_root.join("scripts/sync_status.py");
+            
+            let mut sync_args = vec![sync_script.to_string_lossy().to_string()];
             if docs {
-                sync_args.push("--docs");
+                sync_args.push("--docs".to_string());
             }
             let mut cmd = Command::new("python3");
             cmd.args(&sync_args);
