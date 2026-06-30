@@ -150,9 +150,10 @@ def search_dify_knowledge(query):
         "query": query,
         "retrieval_model": {
             "search_method": "hybrid_search",
-            "top_k": 3,
-            "reranking_enable": False,
-            "score_threshold_enabled": False,
+            "top_k": 5,
+            "reranking_enable": True,
+            "score_threshold_enabled": True,
+            "score_threshold": 0.5,
         },
     }
 

@@ -11,6 +11,8 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(script_dir)
 sys.path.append(os.path.dirname(script_dir))
 
+from mcp_server import search_dify_knowledge_internal
+
 # 環境変数ロード
 dotenv.load_dotenv(os.path.join(os.path.dirname(script_dir), ".env"))
 
@@ -83,75 +85,8 @@ def call_gemini_2_5_eval(query, reference, answer):
         return {"evaluation": "Incorrect", "reason": f"Evaluation error: {e}"}
 
 def call_standard_rag(query, config):
-    api_base = config.get("api_base", "http://localhost:8080/v1").rstrip('/')
-    api_key = config.get("api_key")
-    dataset_id = config.get("dataset_id")
-    
-    # 1. Retrieve context from Dify Dataset
-    retrieve_url = f"{api_base}/datasets/{dataset_id}/retrieve"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "query": query,
-        "retrieval_model": {
-            "search_method": "hybrid_search",
-            "top_k": 4,
-            "reranking_enable": False,
-            "score_threshold_enabled": False
-        }
-    }
-    
-    req = urllib.request.Request(
-        retrieve_url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers=headers,
-        method="POST"
-    )
-    
-    context_parts = []
-    try:
-        with urllib.request.urlopen(req) as response:
-            res_data = json.loads(response.read().decode("utf-8"))
-            for record in res_data.get("records", []):
-                segment = record.get("segment", {})
-                content = segment.get("content", "")
-                if content:
-                    context_parts.append(content)
-    except Exception as e:
-        print(f"Failed to retrieve context from Dify: {e}")
-        return f"Error retrieving context: {e}"
-        
-    context = "\n\n".join(context_parts)
-    
-    # 2. Call LiteLLM for response generation
-    litellm_url = f"{LITELLM_API_BASE.rstrip('/')}/chat/completions"
-    litellm_payload = {
-        "model": "qwen2.5-coder",
-        "messages": [
-            {
-                "role": "user",
-                "content": f"以下に提供するドキュメント情報（コンテキスト）のみに基づいて、質問に正確に回答してください。ドキュメントに記述されていない情報については、絶対に推測や自分の知識を使わずに「情報がありません」とだけ答えてください。\n\n[コンテキスト]\n{context}\n\n[質問]\n{query}"
-            }
-        ],
-        "temperature": 0.0
-    }
-    
-    req = urllib.request.Request(
-        litellm_url,
-        data=json.dumps(litellm_payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Authorization": "Bearer sk-1234"},
-        method="POST"
-    )
-    
-    try:
-        with urllib.request.urlopen(req) as response:
-            res_data = json.loads(response.read().decode("utf-8"))
-            return res_data["choices"][0]["message"]["content"]
-    except Exception as e:
-        print(f"Failed to get response from LiteLLM: {e}")
-        return f"Error generating answer: {e}"
+    # mcp_server.pyの共通検索ロジックをプロジェクト名 'Lissue' で実行
+    return search_dify_knowledge_internal(query, "Lissue")
 
 def call_workflow_rag(query, config):
     api_base = config.get("api_base", "http://localhost:8080/v1").rstrip('/')

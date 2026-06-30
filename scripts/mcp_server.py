@@ -1,6 +1,7 @@
 from mcp.server.fastmcp import FastMCP
 import requests
 import os
+import hashlib
 import json
 import logging
 import redis
@@ -220,16 +221,50 @@ def save_semantic_cache(project_name: str, query: str, query_vector: list, resul
     except Exception as e:
         logging.error(f"Failed to save semantic cache: {e}")
 
+# 完全一致キャッシュの照会 (タスク1/選択肢B)
+def check_exact_cache(project_name: str, query: str) -> str:
+    if not redis_enabled:
+        return None
+    project = project_name or 'default'
+    query_hash = hashlib.md5(query.encode('utf-8')).hexdigest()
+    key = f"mcp_exact_cache:{project}:{query_hash}"
+    try:
+        val = redis_client.get(key)
+        if val:
+            data = json.loads(val)
+            logging.info(f"[Exact Cache HIT] Project: {project}, Key: {key}")
+            return data.get("result")
+    except Exception as e:
+        logging.error(f"Error checking exact cache: {e}")
+    return None
+
+# 完全一致キャッシュの保存 (タスク1/選択肢B)
+def save_exact_cache(project_name: str, query: str, result: str, ttl: int = 86400):
+    if not redis_enabled or not result:
+        return
+    project = project_name or 'default'
+    query_hash = hashlib.md5(query.encode('utf-8')).hexdigest()
+    key = f"mcp_exact_cache:{project}:{query_hash}"
+    data = {
+        "query": query,
+        "result": result
+    }
+    try:
+        redis_client.set(key, json.dumps(data, ensure_ascii=False), ex=ttl)
+        logging.info(f"[Exact Cache Save] Saved key: {key}")
+    except Exception as e:
+        logging.error(f"Failed to save exact cache: {e}")
+
 @mcp.tool()
 @traceable(run_type="retriever", name="search_dify_knowledge")
-def search_dify_knowledge(query: str) -> str:
-    """
-    Search documents in Dify RAG knowledge base.
+def search_dify_knowledge_internal(query: str, project_name: str) -> str:
+    current_proj = project_name
     
-    Args:
-        query: The search text query.
-    """
-    current_proj = get_current_project()
+    # 0. 完全一致キャッシュのチェック (タスク1/選択肢B)
+    if redis_enabled:
+        cached_result = check_exact_cache(current_proj, query)
+        if cached_result:
+            return cached_result
     
     # 1. セマンティックキャッシュのチェック
     query_vector = None
@@ -239,6 +274,8 @@ def search_dify_knowledge(query: str) -> str:
         if query_vector:
             cached_result = check_semantic_cache(current_proj, query_vector)
             if cached_result:
+                # 相互保存：セマンティック側にあれば次回高速化のため完全一致側にも保存
+                save_exact_cache(current_proj, query, cached_result)
                 return cached_result
 
     # 2. キャッシュミス時の通常検索処理
@@ -290,15 +327,19 @@ def search_dify_knowledge(query: str) -> str:
                     final_result = f"[Project: {current_proj or 'default'} (Agentic RAG)] Search Results:\n" + "\n".join(results)
                     
                     # キャッシュの保存
-                    if redis_enabled and query_vector:
-                        save_semantic_cache(current_proj, query, query_vector, final_result)
+                    if redis_enabled:
+                        save_exact_cache(current_proj, query, final_result)
+                        if query_vector:
+                            save_semantic_cache(current_proj, query, query_vector, final_result)
                         
                     return final_result
                 elif isinstance(records, str) and records:
                     # テキストとして直接結果が返るパターン
                     final_result = f"[Project: {current_proj or 'default'} (Agentic RAG)] Search Results:\n{records}"
-                    if redis_enabled and query_vector:
-                        save_semantic_cache(current_proj, query, query_vector, final_result)
+                    if redis_enabled:
+                        save_exact_cache(current_proj, query, final_result)
+                        if query_vector:
+                            save_semantic_cache(current_proj, query, query_vector, final_result)
                     return final_result
                 else:
                     logging.warning("Dify Workflow completed but returned empty result list. Falling back to Dataset retrieval...")
@@ -319,10 +360,11 @@ def search_dify_knowledge(query: str) -> str:
     payload = {
         "query": query,
         "retrieval_model": {
-            "search_method": "keyword_search",
+            "search_method": "hybrid_search",
             "top_k": 5,
-            "reranking_enable": False,
-            "score_threshold_enabled": False
+            "reranking_enable": True,
+            "score_threshold_enabled": True,
+            "score_threshold": 0.5
         }
     }
 
@@ -349,14 +391,28 @@ def search_dify_knowledge(query: str) -> str:
                 final_result = f"[Project: {current_proj or 'default'} (Local Synthesis)] Answer:\n{summary}"
             
             # キャッシュの保存
-            if redis_enabled and query_vector:
-                save_semantic_cache(current_proj, query, query_vector, final_result)
+            if redis_enabled:
+                save_exact_cache(current_proj, query, final_result)
+                if query_vector:
+                    save_semantic_cache(current_proj, query, query_vector, final_result)
                 
             return final_result
         else:
             return f"Error: Dify API responded with status {response.status_code}: {response.text}"
     except Exception as e:
         return f"Exception during Dify knowledge base search: {str(e)}"
+
+@mcp.tool()
+@traceable(run_type="retriever", name="search_dify_knowledge")
+def search_dify_knowledge(query: str) -> str:
+    """
+    Search documents in Dify RAG knowledge base.
+    
+    Args:
+        query: The search text query.
+    """
+    current_proj = get_current_project()
+    return search_dify_knowledge_internal(query, current_proj)
 
 if __name__ == "__main__":
     mcp.run()
