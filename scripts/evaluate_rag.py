@@ -209,6 +209,11 @@ def main():
         print("Error: Project config for Lissue is missing in sync_config.json.")
         sys.exit(1)
         
+    # 環境変数 DIFY_WORKFLOW_API_KEY からのフォールバック (タスク3)
+    if not config.get("workflow_api_key") and os.environ.get("DIFY_WORKFLOW_API_KEY"):
+        config["workflow_api_key"] = os.environ.get("DIFY_WORKFLOW_API_KEY")
+        print("Workflow API key loaded from environment variable DIFY_WORKFLOW_API_KEY.")
+        
     import argparse
     parser = argparse.ArgumentParser(description="Evaluate RAG Accuracy")
     parser.add_argument("--limit", type=int, default=None, help="Limit the number of questions to evaluate")
