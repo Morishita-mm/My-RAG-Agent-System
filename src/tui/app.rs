@@ -319,16 +319,32 @@ impl App {
                 .await;
 
             let mut context_str = String::new();
-            if let Ok(res) = retrieve_res {
-                if let Ok(val) = res.json::<Value>().await {
-                    if let Some(records) = val.get("records").and_then(|r| r.as_array()) {
-                        for rec in records {
-                            if let Some(content) = rec.get("content").and_then(|c| c.as_str()) {
-                                context_str.push_str(content);
-                                context_str.push_str("\n\n");
+            match retrieve_res {
+                Ok(res) => {
+                    let status = res.status();
+                    if status.is_success() {
+                        if let Ok(val) = res.json::<Value>().await {
+                            if let Some(records) = val.get("records").and_then(|r| r.as_array()) {
+                                for rec in records {
+                                    if let Some(content) = rec.get("content").and_then(|c| c.as_str()) {
+                                        context_str.push_str(content);
+                                        context_str.push_str("\n\n");
+                                    }
+                                }
                             }
+                        } else {
+                            let _ = tx.send("Error: Failed to parse Dify Retrieval response JSON.".to_string()).await;
+                            return;
                         }
+                    } else {
+                        let err_text = res.text().await.unwrap_or_default();
+                        let _ = tx.send(format!("Dify Retrieval HTTP Error {}: {}", status, err_text)).await;
+                        return;
                     }
+                }
+                Err(e) => {
+                    let _ = tx.send(format!("Dify Retrieval Connect Error: {}", e)).await;
+                    return;
                 }
             }
 
@@ -337,8 +353,11 @@ impl App {
             }
 
             // 2. LiteLLM Proxy を介して LLM を呼び出す
-            let litellm_url = "http://localhost:4000/v1/chat/completions";
-            let chat_res = client.post(litellm_url)
+            let litellm_base = std::env::var("LITELLM_API_BASE")
+                .unwrap_or_else(|_| "http://localhost:4000/v1".to_string());
+            let litellm_url = format!("{}/chat/completions", litellm_base);
+            
+            let chat_res = client.post(&litellm_url)
                 .header("Authorization", "Bearer sk-1234")
                 .json(&serde_json::json!({
                     "model": "openai/gemini-1.5-flash",
@@ -356,21 +375,129 @@ impl App {
                 .send()
                 .await;
 
-            let mut reply_content = "Failed to connect to LLM Proxy.".to_string();
-            if let Ok(res) = chat_res {
-                if let Ok(val) = res.json::<Value>().await {
-                    if let Some(content) = val.get("choices")
-                        .and_then(|c| c.as_array())
-                        .and_then(|a| a.first())
-                        .and_then(|f| f.get("message"))
-                        .and_then(|m| m.get("content"))
-                        .and_then(|s| s.as_str()) {
-                            reply_content = content.to_string();
+            let reply_content = match chat_res {
+                Ok(res) => {
+                    let status = res.status();
+                    if status.is_success() {
+                        if let Ok(val) = res.json::<Value>().await {
+                            if let Some(content) = val.get("choices")
+                                .and_then(|c| c.as_array())
+                                .and_then(|a| a.first())
+                                .and_then(|f| f.get("message"))
+                                .and_then(|m| m.get("content"))
+                                .and_then(|s| s.as_str()) {
+                                    content.to_string()
+                                } else {
+                                    format!("Error: Unexpected LLM Response Format: {:?}", val)
+                                }
+                        } else {
+                            "Error: Failed to parse LLM Response JSON.".to_string()
                         }
+                    } else {
+                        let err_text = res.text().await.unwrap_or_default();
+                        format!("LLM Proxy HTTP Error {}: {}", status, err_text)
+                    }
                 }
-            }
+                Err(e) => {
+                    format!("LLM Proxy Connect Error: {}", e)
+                }
+            };
 
             let _ = tx.send(reply_content).await;
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+    use std::io::{Read, Write};
+    use std::thread;
+    use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn test_tui_rag_chat_flow() {
+        // 1. HTTPモックサーバーの起動 (ポートはランダム自動割り当て)
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let local_addr = listener.local_addr().unwrap();
+        let port = local_addr.port();
+        
+        // テスト用に環境変数を書き換えてモックサーバーに仕向ける
+        std::env::set_var("LITELLM_API_BASE", format!("http://127.0.0.1:{}", port));
+
+        // スレッドで簡易HTTPモックサーバーの振る舞いを記述
+        thread::spawn(move || {
+            // 第一リクエスト: Dify Retrieval API
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buffer = [0; 2048];
+                let _ = stream.read(&mut buffer);
+                
+                let dify_mock_response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\
+                    \"records\": [\
+                        {\"content\": \"Self-Attention is powerful.\"},\
+                        {\"content\": \"Transformer improves accuracy.\"}\
+                    ]\
+                }";
+                let _ = stream.write_all(dify_mock_response.as_bytes());
+            }
+            
+            // 第二リクエスト: LiteLLM Proxy API
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buffer = [0; 2048];
+                let _ = stream.read(&mut buffer);
+                
+                let litellm_mock_response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\
+                    \"choices\": [\
+                        {\
+                            \"message\": {\
+                                \"role\": \"assistant\",\
+                                \"content\": \"Self-Attention design details summary.\"\
+                            }\
+                        }\
+                    ]\
+                }";
+                let _ = stream.write_all(litellm_mock_response.as_bytes());
+            }
+        });
+
+        // 2. テスト用 App のセットアップ
+        let mut app = App::new();
+        app.projects = vec![
+            ProjectInfo {
+                name: "TestProject".to_string(),
+                dataset_id: "test-dataset-123".to_string(),
+                api_key: "test-api-key-456".to_string(),
+                api_base: format!("http://127.0.0.1:{}", port),
+                synced_files: 10,
+                pending_files: 0,
+            }
+        ];
+        app.selected_project_index = 0;
+        app.mode = TuiMode::Chat;
+
+        // 非同期チャットチャンネル
+        let (chat_tx, mut chat_rx) = mpsc::channel::<String>(10);
+
+        // 3. チャットの非同期送信テスト
+        app.send_rag_chat("Explain Attention".to_string(), chat_tx).await;
+        
+        // 非同期回答がモックサーバーから回収されるのを待機 (最長3秒)
+        let mut received_reply = None;
+        for _ in 0..30 {
+            if let Ok(reply) = chat_rx.try_recv() {
+                received_reply = Some(reply);
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+
+        // 4. アサーション検証
+        assert!(received_reply.is_some(), "Should receive RAG chat reply from mock server");
+        let reply = received_reply.unwrap();
+        assert!(reply.contains("Self-Attention design details summary."));
+        
+        // 環境変数をクリーンアップ
+        std::env::remove_var("LITELLM_API_BASE");
     }
 }
