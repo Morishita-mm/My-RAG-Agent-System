@@ -223,11 +223,13 @@ def main():
     with open(dataset_path, "r", encoding="utf-8") as f:
         dataset = json.load(f)
         
-    questions = dataset.get("questions", [])
+    questions = dataset if isinstance(dataset, list) else dataset.get("questions", [])
     print(f"Loaded {len(questions)} test questions.")
     
     sys_a_scores = []
     sys_b_scores = []
+    sys_a_latencies = []
+    sys_b_latencies = []
     
     results = []
     
@@ -238,7 +240,11 @@ def main():
         
         # System A (Standard RAG)
         print("  Running System A (Standard RAG)...")
+        start_time_a = time.perf_counter()
         ans_a = call_standard_rag(query, config)
+        latency_a = time.perf_counter() - start_time_a
+        sys_a_latencies.append(latency_a)
+        
         print("  Evaluating System A response...")
         eval_a = call_gemini_2_5_eval(query, reference, ans_a)
         score_a = score_mapping(eval_a.get("evaluation"))
@@ -248,10 +254,15 @@ def main():
         ans_b = "Workflow Skipped (No API Key)"
         eval_b = {"evaluation": "Missing", "reason": "Workflow API Key not set"}
         score_b = 0.0
+        latency_b = 0.0
         
         if config.get("workflow_api_key"):
             print("  Running System B (Dify Workflow)...")
+            start_time_b = time.perf_counter()
             ans_b = call_workflow_rag(query, config)
+            latency_b = time.perf_counter() - start_time_b
+            sys_b_latencies.append(latency_b)
+            
             print("  Evaluating System B response...")
             eval_b = call_gemini_2_5_eval(query, reference, ans_b)
             score_b = score_mapping(eval_b.get("evaluation"))
@@ -267,18 +278,32 @@ def main():
                 "answer": ans_a,
                 "evaluation": eval_a.get("evaluation"),
                 "reason": eval_a.get("reason"),
-                "score": score_a
+                "score": score_a,
+                "latency": latency_a
             },
             "system_b": {
                 "answer": ans_b,
                 "evaluation": eval_b.get("evaluation"),
                 "reason": eval_b.get("reason"),
-                "score": score_b
+                "score": score_b,
+                "latency": latency_b
             }
         })
         
     avg_score_a = sum(sys_a_scores) / len(sys_a_scores) if sys_a_scores else 0.0
     avg_score_b = sum(sys_b_scores) / len(sys_b_scores) if sys_b_scores else 0.0
+    
+    # レイテンシ統計
+    avg_latency_a = sum(sys_a_latencies) / len(sys_a_latencies) if sys_a_latencies else 0.0
+    min_latency_a = min(sys_a_latencies) if sys_a_latencies else 0.0
+    max_latency_a = max(sys_a_latencies) if sys_a_latencies else 0.0
+    total_time_a = sum(sys_a_latencies)
+    
+    has_workflow = bool(config.get("workflow_api_key"))
+    avg_latency_b = sum(sys_b_latencies) / len(sys_b_latencies) if sys_b_latencies else 0.0
+    min_latency_b = min(sys_b_latencies) if sys_b_latencies else 0.0
+    max_latency_b = max(sys_b_latencies) if sys_b_latencies else 0.0
+    total_time_b = sum(sys_b_latencies)
     
     # レポートファイルの出力先 (常に ~/agents/reports/ に出力)
     report_dir = os.path.expanduser("~/agents/reports")
@@ -287,31 +312,42 @@ def main():
     
     with open(report_path, "w", encoding="utf-8") as f:
         f.write("# RAG精度評価レポート (RAG Quantitative Accuracy Report)\n\n")
-        f.write(f"本レポートは、RAGシステムにおける回答精度の測定結果です。評価用LLMとして `gemini-2.5-flash` を使用し、事実性・適合性・ハルシネーションの有無を定量的にスコア化しています。\n\n")
+        f.write("本レポートは、RAGシステムにおける回答精度および応答速度の測定結果です。評価用LLMとして `gemini-2.5-flash` を使用し、事実性・適合性・ハルシネーションの有無を定量的にスコア化しています。\n\n")
         
         f.write("## 1. 総合スコア比較\n")
         f.write("スコア範囲: `-1.0` (全て誤回答/ハルシネーション) 〜 `1.0` (全て完璧な回答)\n\n")
         f.write("| システムアプローチ | 平均スコア | 評価概要 |\n")
         f.write("|---|---|---|\n")
         f.write(f"| **System A (Standard RAG)** | `{avg_score_a:+.4f}` | Dify Retrieve 経由のドキュメント検索 ＋ ローカル推論 |\n")
-        if config.get("workflow_api_key"):
+        if has_workflow:
             f.write(f"| **System B (Dify Workflow)** | `{avg_score_b:+.4f}` | Dify ワークフロー（Agentic RAG / リランク・クエリ拡張） |\n\n")
         else:
             f.write(f"| **System B (Dify Workflow)** | `N/A` | ※ `DIFY_RAG_WORKFLOW_API_KEY` 未設定のためスキップ |\n\n")
             
-        f.write("## 2. 質問ごとの詳細評価結果\n")
+        f.write("## 2. 応答速度（レイテンシ）比較\n\n")
+        f.write("| システムアプローチ | 平均応答時間 | 最小応答時間 | 最大応答時間 | 総処理時間 |\n")
+        f.write("|---|---|---|---|---|\n")
+        f.write(f"| **System A (Standard RAG)** | `{avg_latency_a:.2f}秒` | `{min_latency_a:.2f}秒` | `{max_latency_a:.2f}秒` | `{total_time_a:.2f}秒` |\n")
+        if has_workflow:
+            f.write(f"| **System B (Dify Workflow)** | `{avg_latency_b:.2f}秒` | `{min_latency_b:.2f}秒` | `{max_latency_b:.2f}秒` | `{total_time_b:.2f}秒` |\n\n")
+        else:
+            f.write("| **System B (Dify Workflow)** | `N/A` | `N/A` | `N/A` | `N/A` |\n\n")
+
+        f.write("## 3. 質問ごとの詳細評価結果\n")
         for idx, res in enumerate(results, 1):
             f.write(f"### Q{idx}. {res['query']}\n")
             f.write(f"**模範解答 (Reference):**\n> {res['reference']}\n\n")
             
             f.write("#### 🔴 System A (Standard RAG)\n")
             f.write(f"- **生成回答**: {res['system_a']['answer']}\n")
+            f.write(f"- **応答時間**: `{res['system_a']['latency']:.4f}秒`\n")
             f.write(f"- **分類評価**: `{res['system_a']['evaluation']}` (点数: `{res['system_a']['score']:+.1f}`)\n")
             f.write(f"- **評価理由**: {res['system_a']['reason']}\n\n")
             
-            if config.get("workflow_api_key"):
+            if has_workflow:
                 f.write("#### 🔵 System B (Dify Workflow)\n")
                 f.write(f"- **生成回答**: {res['system_b']['answer']}\n")
+                f.write(f"- **応答時間**: `{res['system_b']['latency']:.4f}秒`\n")
                 f.write(f"- **分類評価**: `{res['system_b']['evaluation']}` (点数: `{res['system_b']['score']:+.1f}`)\n")
                 f.write(f"- **評価理由**: {res['system_b']['reason']}\n\n")
             else:
