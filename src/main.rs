@@ -48,19 +48,7 @@ fn run_core_command(subcmd: &str, args: &[&str]) -> io::Result<ExitStatus> {
 #[tokio::main]
 async fn main() -> io::Result<()> {
     // 1. プロジェクトルートを特定し、.env の環境変数をロード
-    let project_root = get_project_root();
-    if let Ok(content) = std::fs::read_to_string(project_root.join(".env")) {
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
-            if let Some((key, val)) = trimmed.split_once('=') {
-                let clean_val = val.trim().trim_matches('"').trim_matches('\'');
-                std::env::set_var(key.trim(), clean_val);
-            }
-        }
-    }
+    let _ = dotenvy::from_path(get_project_root().join(".env"));
 
     let args = Cli::parse();
 
