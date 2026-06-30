@@ -312,7 +312,9 @@ impl App {
                     "query": query,
                     "retrieval_model": {
                         "search_method": "hybrid_search",
-                        "top_k": 3
+                        "top_k": 3,
+                        "reranking_enable": false,
+                        "score_threshold_enabled": false
                     }
                 }))
                 .send()
