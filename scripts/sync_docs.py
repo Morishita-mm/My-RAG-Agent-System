@@ -32,7 +32,7 @@ class DifySyncHandler(FileSystemEventHandler):
                 self.file_hashes[file_path] = val["hash"]
                 
         # サポートする拡張子定義
-        self.supported_extensions = ('.md', '.pdf', '.docx', '.xlsx', '.xls', '.exls')
+        self.supported_extensions = ('.md', '.pdf', '.docx', '.xlsx', '.xls', '.exls', '.png', '.jpg', '.jpeg')
         
         # Redis接続初期化
         self.redis_enabled = False

@@ -137,35 +137,27 @@ def score_mapping(eval_str):
     }
     return mapping.get(eval_str, 0.0)
 
-def main():
+def run_evaluation(limit=None, config_override=None):
     print("=== Starting RAG Quantitative Accuracy Evaluation ===")
-    config = get_project_config()
+    config = config_override or get_project_config()
     if not config:
-        print("Error: Project config for Lissue is missing in sync_config.json.")
-        sys.exit(1)
+        raise ValueError("Project config for Lissue is missing in sync_config.json.")
         
     # 環境変数 DIFY_WORKFLOW_API_KEY からのフォールバック (タスク3)
     if not config.get("workflow_api_key") and os.environ.get("DIFY_WORKFLOW_API_KEY"):
         config["workflow_api_key"] = os.environ.get("DIFY_WORKFLOW_API_KEY")
         print("Workflow API key loaded from environment variable DIFY_WORKFLOW_API_KEY.")
         
-    import argparse
-    parser = argparse.ArgumentParser(description="Evaluate RAG Accuracy")
-    parser.add_argument("--limit", type=int, default=None, help="Limit the number of questions to evaluate")
-    # sys.argv のパース。他のスクリプトからインポートされた際の安全性のために sys.argv パース時の例外に配慮
-    args, unknown = parser.parse_known_args()
-        
     dataset_path = os.path.join(os.path.dirname(script_dir), "tests/evaluation_dataset.json")
     if not os.path.exists(dataset_path):
-        print(f"Error: Dataset file not found at {dataset_path}")
-        sys.exit(1)
+        raise FileNotFoundError(f"Dataset file not found at {dataset_path}")
         
     with open(dataset_path, "r", encoding="utf-8") as f:
         dataset = json.load(f)
         
     questions = dataset if isinstance(dataset, list) else dataset.get("questions", [])
-    if args.limit:
-        questions = questions[:args.limit]
+    if limit:
+        questions = questions[:limit]
     print(f"Loaded {len(questions)} test questions.")
     
     sys_a_scores = []
@@ -323,6 +315,23 @@ def main():
         print(f"Warning: Failed to write evaluation metrics to CSV: {csv_err}")
 
     print(f"\nEvaluation complete! Report successfully generated at: {report_path}")
+    return {
+        "avg_score_a": avg_score_a,
+        "avg_score_b": avg_score_b,
+        "results": results
+    }
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Evaluate RAG Accuracy")
+    parser.add_argument("--limit", type=int, default=None, help="Limit the number of questions to evaluate")
+    args, unknown = parser.parse_known_args()
+    
+    try:
+        run_evaluation(limit=args.limit)
+    except Exception as e:
+        print(f"Evaluation failed: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

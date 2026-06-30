@@ -13,7 +13,7 @@ import os
 script_dir = os.path.dirname(os.path.abspath(__file__))
 if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
-from utils import get_current_project as get_base_project
+from utils import get_current_project as get_base_project, reorder_records
 
 # ログ設定
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -315,8 +315,6 @@ def save_exact_cache(project_name: str, query: str, result: str, ttl: int = 8640
     except Exception as e:
         logging.error(f"Failed to save exact cache: {e}")
 
-@mcp.tool()
-@traceable(run_type="retriever", name="search_dify_knowledge")
 def search_dify_knowledge_internal(query: str, project_name: str) -> str:
     current_proj = project_name
     
@@ -445,8 +443,10 @@ def search_dify_knowledge_internal(query: str, project_name: str) -> str:
             if not records:
                 final_result = f"No matching documents found in dataset {dataset_id} for query '{query}'."
             else:
+                # 'Lost in the Middle' 対策のコンテキスト再配置を適用
+                reordered_records = reorder_records(records)
                 results = []
-                for record in records:
+                for record in reordered_records:
                     segment = record.get("segment", {})
                     content = segment.get("content", "")
                     if content:

@@ -8,7 +8,7 @@ import requests
 script_dir = os.path.dirname(os.path.abspath(__file__))
 if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
-from utils import get_current_project
+from utils import get_current_project, reorder_records
 
 LITELLM_BASE = os.environ.get("LITELLM_BASE", "http://localhost:4000")
 LITELLM_KEY = os.environ.get("LITELLM_KEY", "sk-1234")
@@ -166,8 +166,9 @@ def search_dify_knowledge(query):
                 return
 
             print(f"=== Knowledge search results for [Project: {project_id}] (Local Synthesis) ===")
+            reordered_records = reorder_records(records)
             results = []
-            for rec in records:
+            for rec in reordered_records:
                 segment = rec.get("segment", {})
                 content = segment.get("content", "")
                 if content:

@@ -115,7 +115,8 @@ class TestDocumentParser(unittest.TestCase):
         """Test convert_document_to_markdown routes correctly based on file suffix"""
         with patch('document_parser.parse_docx_to_markdown') as mock_docx, \
              patch('document_parser.parse_pdf_to_markdown') as mock_pdf, \
-             patch('document_parser.parse_excel_to_markdown') as mock_xlsx:
+             patch('document_parser.parse_excel_to_markdown') as mock_xlsx, \
+             patch('document_parser.parse_image_to_markdown') as mock_image:
              
              document_parser.convert_document_to_markdown("hello.docx")
              mock_docx.assert_called_once_with("hello.docx")
@@ -125,6 +126,23 @@ class TestDocumentParser(unittest.TestCase):
              
              document_parser.convert_document_to_markdown("hello.xlsx")
              mock_xlsx.assert_called_once_with("hello.xlsx")
+             
+             document_parser.convert_document_to_markdown("hello.png")
+             mock_image.assert_called_once_with("hello.png")
+
+    @patch('PIL.Image.open')
+    @patch('document_parser.analyze_image_with_vision')
+    def test_parse_image_to_markdown(self, mock_vision, mock_open):
+        """Test parse_image_to_markdown successfully opens image and calls vision"""
+        mock_img = MagicMock()
+        mock_open.return_value.__enter__.return_value = mock_img
+        mock_vision.return_value = "Parsed text from PNG screenshot."
+        
+        result = document_parser.parse_image_to_markdown("test_screenshot.png")
+        self.assertIn("# Image Content: test_screenshot.png", result)
+        self.assertIn("Parsed text from PNG screenshot.", result)
+        mock_open.assert_called_once_with("test_screenshot.png")
+        mock_vision.assert_called_once_with(mock_img)
 
 if __name__ == '__main__':
     unittest.main()

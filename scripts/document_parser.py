@@ -176,6 +176,20 @@ def parse_excel_to_markdown(excel_path: str) -> str:
         
     return "\n".join(markdown_content)
 
+def parse_image_to_markdown(image_path: str) -> str:
+    """Parse direct image files (.png, .jpg, .jpeg) using Vision LLM"""
+    from PIL import Image
+    try:
+        logging.info(f"Parsing Image '{image_path}' using Vision LLM...")
+        with Image.open(image_path) as img:
+            vision_text = analyze_image_with_vision(img)
+            if vision_text:
+                return f"# Image Content: {os.path.basename(image_path)}\n\n{vision_text}\n"
+    except Exception as e:
+        logging.error(f"Error parsing image '{image_path}': {e}")
+        return f"Error: Failed to parse image: {e}"
+    return "Error: Empty or unparseable image content."
+
 def convert_document_to_markdown(file_path: str) -> str:
     """Main routing function to parse any supported document path to Markdown string"""
     ext = os.path.splitext(file_path)[1].lower()
@@ -186,6 +200,8 @@ def convert_document_to_markdown(file_path: str) -> str:
         return parse_docx_to_markdown(file_path)
     elif ext in ['.xlsx', '.xls', '.exls']:
         return parse_excel_to_markdown(file_path)
+    elif ext in ['.png', '.jpg', '.jpeg']:
+        return parse_image_to_markdown(file_path)
     elif ext == '.md':
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
