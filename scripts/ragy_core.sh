@@ -76,6 +76,15 @@ start_services() {
   echo "=== [5/5] Starting Deploy Webhook Listener ==="
   if [ "$AUTO_DEPLOY" = "1" ]; then
     echo "Auto-deploy mode detected. Skipping deploy_listener.py stop."
+    # 古い deploy_listener.py が完全に終了してポートを解放するのを最大10秒間待機します
+    for i in {1..10}; do
+      OLD_PID=$(pgrep -f "scripts/deploy_listener.py" | grep -v "$$" | head -n 1)
+      if [ -z "$OLD_PID" ]; then
+        break
+      fi
+      echo "Waiting for old deploy_listener (PID: $OLD_PID) to exit and release port..."
+      sleep 1
+    done
   elif [ -f "$PROJECT_DIR/logs/deploy_listener.pid" ]; then
     DEPLOY_PID=$(cat "$PROJECT_DIR/logs/deploy_listener.pid")
     if ps -p "$DEPLOY_PID" >/dev/null 2>&1; then

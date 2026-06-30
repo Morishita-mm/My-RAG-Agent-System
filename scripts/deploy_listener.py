@@ -42,11 +42,14 @@ def trigger_deploy_script():
         logging.info("Starting automated deploy workflow...")
         
         # AUTO_DEPLOY=1 を設定して ragy を実行させ、親のキルによるシグナル強制終了を回避します。
+        # git pull で上書きされたバイナリの実行権限と隔離フラグを解除した上で再起動します。
         deploy_cmd = (
             "sleep 2 && "
             "echo '\\n--- Automated Deploy Triggered ---' >> logs/deploy.log 2>&1 && "
             "git checkout main >> logs/deploy.log 2>&1 && "
             "git pull origin main >> logs/deploy.log 2>&1 && "
+            "chmod +x ./ragy >> logs/deploy.log 2>&1 && "
+            "xattr -d com.apple.quarantine ./ragy 2>/dev/null || true && "
             "AUTO_DEPLOY=1 ./ragy restart >> logs/deploy.log 2>&1"
         )
         
