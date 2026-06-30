@@ -209,6 +209,12 @@ def main():
         print("Error: Project config for Lissue is missing in sync_config.json.")
         sys.exit(1)
         
+    import argparse
+    parser = argparse.ArgumentParser(description="Evaluate RAG Accuracy")
+    parser.add_argument("--limit", type=int, default=None, help="Limit the number of questions to evaluate")
+    # sys.argv のパース。他のスクリプトからインポートされた際の安全性のために sys.argv パース時の例外に配慮
+    args, unknown = parser.parse_known_args()
+        
     dataset_path = os.path.join(os.path.dirname(script_dir), "tests/evaluation_dataset.json")
     if not os.path.exists(dataset_path):
         print(f"Error: Dataset file not found at {dataset_path}")
@@ -218,6 +224,8 @@ def main():
         dataset = json.load(f)
         
     questions = dataset if isinstance(dataset, list) else dataset.get("questions", [])
+    if args.limit:
+        questions = questions[:args.limit]
     print(f"Loaded {len(questions)} test questions.")
     
     sys_a_scores = []
@@ -350,6 +358,30 @@ def main():
                 f.write("- **注意**: 本システムで Dify ワークフローの精度を測定するには、Dify 管理画面にてワークフロー API キーを発行し、`docs/sync_config.json` 内の `Lissue` プロジェクト設定の `workflow_api_key` にキーを設定してください。\n\n")
             f.write("---\n\n")
             
+    # 履歴レポートのコピー保存と CSV へのメトリクス追記 (タスク1)
+    import shutil
+    from datetime import datetime
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    history_report_path = os.path.join(report_dir, f"evaluation_report_{timestamp}.md")
+    shutil.copy2(report_path, history_report_path)
+    print(f"History report copied to: {history_report_path}")
+    
+    csv_path = os.path.join(report_dir, "evaluation_history.csv")
+    csv_exists = os.path.exists(csv_path)
+    
+    score_b_str = f"{avg_score_b:+.4f}" if has_workflow else "N/A"
+    latency_b_str = f"{avg_latency_b:.2f}" if has_workflow else "N/A"
+    
+    try:
+        with open(csv_path, "a", encoding="utf-8") as csv_f:
+            if not csv_exists:
+                csv_f.write("timestamp,system_a_score,system_b_score,system_a_avg_latency,system_b_avg_latency,total_queries\n")
+            csv_f.write(f"{timestamp},{avg_score_a:+.4f},{score_b_str},{avg_latency_a:.2f},{latency_b_str},{len(results)}\n")
+        print(f"Evaluation metrics appended to: {csv_path}")
+    except Exception as csv_err:
+        print(f"Warning: Failed to write evaluation metrics to CSV: {csv_err}")
+
     print(f"\nEvaluation complete! Report successfully generated at: {report_path}")
 
 if __name__ == "__main__":
