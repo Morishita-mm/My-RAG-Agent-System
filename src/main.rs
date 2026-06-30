@@ -5,6 +5,27 @@ use cli::{Cli, Commands};
 use clap::Parser;
 use std::process::{Command, ExitStatus};
 use std::io;
+use std::net::TcpStream;
+use std::time::Duration;
+
+fn check_tcp_port(addr: &str) -> bool {
+    use std::net::ToSocketAddrs;
+    if let Ok(mut addrs) = addr.to_socket_addrs() {
+        if let Some(socket_addr) = addrs.next() {
+            return TcpStream::connect_timeout(&socket_addr, Duration::from_millis(500)).is_ok();
+        }
+    }
+    false
+}
+
+fn check_process(name: &str) -> bool {
+    if let Ok(output) = Command::new("pgrep").args(&["-f", name]).output() {
+        output.status.success() && !output.stdout.is_empty()
+    } else {
+        false
+    }
+}
+
 
 fn run_shell_command(cmd: &str, args: &[&str]) -> io::Result<ExitStatus> {
     Command::new(cmd)
@@ -35,11 +56,54 @@ async fn main() -> io::Result<()> {
                 _ => eprintln!("Failed to stop services."),
             }
         }
-        Commands::Status => {
-            println!("=== Docker Container Status ===");
-            let _ = run_shell_command("docker", &["compose", "ps"]);
-            println!("\n=== Document Synchronization Status ===");
-            let _ = run_shell_command("python3", &["scripts/sync_status.py"]);
+        Commands::Status { detail, docs } => {
+            println!("=== RAG System Status ===");
+            
+            let ollama_status = if check_tcp_port("127.0.0.1:11434") {
+                "RUNNING (127.0.0.1:11434)"
+            } else {
+                "STOPPED"
+            };
+            println!("Ollama          : {}", ollama_status);
+
+            let redis_status = if check_tcp_port("127.0.0.1:6379") {
+                "RUNNING (127.0.0.1:6379)"
+            } else {
+                "STOPPED"
+            };
+            println!("Redis           : {}", redis_status);
+
+            let litellm_status = if check_tcp_port("127.0.0.1:4000") {
+                "RUNNING (127.0.0.1:4000)"
+            } else {
+                "STOPPED"
+            };
+            println!("LiteLLM Proxy   : {}", litellm_status);
+
+            let dify_status = if check_tcp_port("127.0.0.1:8080") {
+                "RUNNING (127.0.0.1:8080)"
+            } else {
+                "STOPPED"
+            };
+            println!("Dify Gateway    : {}", dify_status);
+
+            let watchdog_status = if check_process("sync_docs.py") {
+                "RUNNING"
+            } else {
+                "STOPPED"
+            };
+            println!("Sync Watchdog   : {}", watchdog_status);
+
+            if detail {
+                println!("\n=== Detailed Docker Containers ===");
+                let _ = run_shell_command("docker", &["compose", "ps"]);
+            }
+
+            let mut sync_args = vec!["scripts/sync_status.py"];
+            if docs {
+                sync_args.push("--docs");
+            }
+            let _ = run_shell_command("python3", &sync_args);
         }
         Commands::Sync => {
             println!("Triggering document synchronization...");

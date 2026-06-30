@@ -17,7 +17,15 @@ pub enum Commands {
     Stop,
     
     /// Show service and document synchronization status
-    Status,
+    Status {
+        /// Show detailed Docker container list
+        #[arg(long)]
+        detail: bool,
+
+        /// Show full list of synchronized documents and their paths
+        #[arg(long)]
+        docs: bool,
+    },
     
     /// Trigger manual document synchronization immediately
     Sync,

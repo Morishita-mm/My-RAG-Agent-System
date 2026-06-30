@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import hashlib
+import argparse
 
 def get_file_hash(file_path):
     if not os.path.exists(file_path):
@@ -16,6 +17,10 @@ def get_file_hash(file_path):
         return None
 
 def main():
+    parser = argparse.ArgumentParser(description="Show RAG Document Sync Status")
+    parser.add_argument("--docs", action="store_true", help="Show full list of document files and paths")
+    args = parser.parse_args()
+
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(script_dir)
     
@@ -68,32 +73,63 @@ def main():
             if abs_meta_path.startswith(os.path.abspath(project_dir)):
                 meta_project_files[abs_meta_path] = info
                 
-        # 1. ローカルに存在するファイルのステータス
+        # ローカルに存在するファイルのステータス
         if not local_files and not meta_project_files:
             print("  No documents found.")
             continue
             
+        synced_count = 0
+        new_count = 0
+        modified_count = 0
+        deleted_count = 0
+        
+        detail_lines = []
+        
         for file_path in sorted(local_files):
             rel_path = os.path.relpath(file_path, project_root)
             meta_info = meta_project_files.get(file_path)
             
             if not meta_info:
-                print(f"  [NEW]       {rel_path}")
+                new_count += 1
+                detail_lines.append(f"  [NEW]       {rel_path}")
             else:
                 current_hash = get_file_hash(file_path)
                 saved_hash = meta_info.get("hash")
                 doc_id = meta_info.get("doc_id")
                 if current_hash != saved_hash:
-                    print(f"  [MODIFIED]  {rel_path} (ID: {doc_id})")
+                    modified_count += 1
+                    detail_lines.append(f"  [MODIFIED]  {rel_path} (ID: {doc_id})")
                 else:
-                    print(f"  [SYNCED]    {rel_path} (ID: {doc_id})")
+                    synced_count += 1
+                    detail_lines.append(f"  [SYNCED]    {rel_path} (ID: {doc_id})")
                     
-        # 2. メタデータにはあるが、ローカルで削除されたファイル
+        # メタデータにはあるが、ローカルで削除されたファイル
         for file_path, meta_info in sorted(meta_project_files.items()):
             if file_path not in local_files:
                 rel_path = os.path.relpath(file_path, project_root)
                 doc_id = meta_info.get("doc_id")
-                print(f"  [DELETED]   {rel_path} (Pending Removal, ID: {doc_id})")
+                deleted_count += 1
+                detail_lines.append(f"  [DELETED]   {rel_path} (Pending Removal, ID: {doc_id})")
+
+        # 表示の切り替え
+        if args.docs:
+            for line in detail_lines:
+                print(line)
+        else:
+            status_parts = []
+            if synced_count > 0:
+                status_parts.append(f"{synced_count} SYNCED")
+            if new_count > 0:
+                status_parts.append(f"{new_count} NEW")
+            if modified_count > 0:
+                status_parts.append(f"{modified_count} MODIFIED")
+            if deleted_count > 0:
+                status_parts.append(f"{deleted_count} DELETED")
+                
+            if not status_parts:
+                print("  Status: No documents.")
+            else:
+                print(f"  Status: {', '.join(status_parts)}")
 
 if __name__ == "__main__":
     main()
