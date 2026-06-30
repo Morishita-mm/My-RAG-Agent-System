@@ -121,19 +121,44 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
                     // 履歴の描画 (スクロール対応で直近のチャットを表示)
                     let history_height = chat_chunks[0].height as usize - 2; // ボーダー分引く
+                    let history_width = (chat_chunks[0].width as usize).saturating_sub(2);
                     let mut chat_lines = Vec::new();
                     
                     for msg in &app.chat_history {
-                        if msg.is_user {
-                            chat_lines.push(Line::from(vec![
-                                Span::styled("👤 You: ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                                Span::raw(&msg.content),
-                            ]));
-                        } else {
-                            chat_lines.push(Line::from(vec![
-                                Span::styled("🤖 AI : ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-                                Span::raw(&msg.content),
-                            ]));
+                        let prefix = if msg.is_user { "👤 You: " } else { "🤖 AI : " };
+                        let prefix_len = prefix.chars().count();
+                        let prefix_color = if msg.is_user { Color::Green } else { Color::Magenta };
+                        
+                        let raw_lines: Vec<&str> = msg.content.lines().collect();
+                        let mut is_first_line = true;
+                        
+                        for raw_line in raw_lines {
+                            let current_width = if is_first_line {
+                                history_width.saturating_sub(prefix_len)
+                            } else {
+                                history_width
+                            };
+                            
+                            let wrapped = wrap_text(raw_line, current_width);
+                            
+                            for (i, w_line) in wrapped.into_iter().enumerate() {
+                                if is_first_line && i == 0 {
+                                    chat_lines.push(Line::from(vec![
+                                        Span::styled(prefix, Style::default().fg(prefix_color).add_modifier(Modifier::BOLD)),
+                                        Span::raw(w_line),
+                                    ]));
+                                } else {
+                                    let indent = if is_first_line {
+                                        " ".repeat(prefix_len)
+                                    } else {
+                                        String::new()
+                                    };
+                                    chat_lines.push(Line::from(vec![
+                                        Span::raw(format!("{}{}", indent, w_line)),
+                                    ]));
+                                }
+                            }
+                            is_first_line = false;
                         }
                         chat_lines.push(Line::from("")); // 空行挟む
                     }
@@ -181,8 +206,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                         .block(Block::default()
                             .title(history_title)
                             .borders(Borders::ALL)
-                            .border_style(Style::default().fg(history_border_color).add_modifier(if app.chat_focus == ChatFocus::History { Modifier::BOLD } else { Modifier::empty() })))
-                        .wrap(ratatui::widgets::Wrap { trim: true });
+                            .border_style(Style::default().fg(history_border_color).add_modifier(if app.chat_focus == ChatFocus::History { Modifier::BOLD } else { Modifier::empty() })));
                     f.render_widget(history_box, chat_chunks[0]);
 
                     // 入力欄の描画
@@ -276,4 +300,37 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_string()];
+    }
+    let mut lines = Vec::new();
+    let mut current_line = String::new();
+    let mut current_width = 0;
+
+    for c in text.chars() {
+        let char_width = if c as u32 > 0x7F { 2 } else { 1 };
+        
+        if current_width + char_width > width {
+            if !current_line.is_empty() {
+                lines.push(current_line.clone());
+                current_line.clear();
+                current_width = 0;
+            }
+        }
+        current_line.push(c);
+        current_width += char_width;
+    }
+    
+    if !current_line.is_empty() {
+        lines.push(current_line);
+    }
+    
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    
+    lines
 }
