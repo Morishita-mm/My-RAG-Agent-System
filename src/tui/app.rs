@@ -1,5 +1,4 @@
 use std::fs;
-use std::path::Path;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -34,7 +33,7 @@ pub struct ProjectInfo {
 
 use std::path::PathBuf;
 
-fn get_project_root() -> PathBuf {
+pub(crate) fn get_project_root() -> PathBuf {
     if let Ok(exe_path) = std::env::current_exe() {
         if let Ok(real_path) = std::fs::canonicalize(exe_path) {
             let mut current = real_path.parent();

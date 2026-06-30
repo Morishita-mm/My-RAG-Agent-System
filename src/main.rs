@@ -28,22 +28,7 @@ fn check_process(name: &str) -> bool {
 
 
 
-use std::path::PathBuf;
-
-fn get_project_root() -> PathBuf {
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Ok(real_path) = std::fs::canonicalize(exe_path) {
-            let mut current = real_path.parent();
-            while let Some(path) = current {
-                if path.join("Cargo.toml").exists() {
-                    return path.to_path_buf();
-                }
-                current = path.parent();
-            }
-        }
-    }
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-}
+use crate::tui::app::get_project_root;
 
 fn run_core_command(subcmd: &str, args: &[&str]) -> io::Result<ExitStatus> {
     let project_root = get_project_root();
@@ -71,7 +56,7 @@ async fn main() -> io::Result<()> {
                 continue;
             }
             if let Some((key, val)) = trimmed.split_once('=') {
-                let clean_val = val.split('#').next().unwrap_or("").trim().trim_matches('"').trim_matches('\'');
+                let clean_val = val.trim().trim_matches('"').trim_matches('\'');
                 std::env::set_var(key.trim(), clean_val);
             }
         }
