@@ -10,6 +10,12 @@ pub enum TuiMode {
     Chat,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatFocus {
+    Input,
+    History,
+}
+
 #[derive(Clone)]
 pub struct ChatMessage {
     pub is_user: bool,
@@ -44,6 +50,8 @@ pub struct App {
     pub chat_history: Vec<ChatMessage>,
     pub input_buffer: String,
     pub is_loading_chat: bool,
+    pub chat_focus: ChatFocus,
+    pub chat_scroll_offset: usize,
 }
 
 impl App {
@@ -68,6 +76,8 @@ impl App {
             chat_history: Vec::new(),
             input_buffer: String::new(),
             is_loading_chat: false,
+            chat_focus: ChatFocus::Input,
+            chat_scroll_offset: 0,
         }
     }
 
@@ -296,6 +306,8 @@ impl App {
         let project = self.projects[self.selected_project_index].clone();
         
         self.is_loading_chat = true;
+        self.chat_scroll_offset = 0;
+        self.chat_focus = ChatFocus::Input;
         self.chat_history.push(ChatMessage {
             is_user: true,
             content: query.clone(),

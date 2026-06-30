@@ -145,21 +145,49 @@ pub async fn run_tui() -> Result<(), Box<dyn Error>> {
                                 app.mode = TuiMode::ProjectList;
                                 app.status_message = "Exited Chat Mode.".to_string();
                             }
-                            KeyCode::Enter => {
-                                let query = app.input_buffer.trim().to_string();
-                                if !query.is_empty() && !app.is_loading_chat {
-                                    app.input_buffer.clear();
-                                    app.status_message = "Retrieving context & generating answer...".to_string();
-                                    app.send_rag_chat(query, chat_tx.clone()).await;
+                            KeyCode::Tab => {
+                                app.chat_focus = match app.chat_focus {
+                                    app::ChatFocus::Input => app::ChatFocus::History,
+                                    app::ChatFocus::History => app::ChatFocus::Input,
+                                };
+                                app.status_message = format!("Switched focus to {:?}", app.chat_focus);
+                            }
+                            _ => {
+                                match app.chat_focus {
+                                    app::ChatFocus::Input => {
+                                        match key.code {
+                                            KeyCode::Enter => {
+                                                let query = app.input_buffer.trim().to_string();
+                                                if !query.is_empty() && !app.is_loading_chat {
+                                                    app.input_buffer.clear();
+                                                    app.status_message = "Retrieving context & generating answer...".to_string();
+                                                    app.send_rag_chat(query, chat_tx.clone()).await;
+                                                }
+                                            }
+                                            KeyCode::Backspace => {
+                                                app.input_buffer.pop();
+                                            }
+                                            KeyCode::Char(c) => {
+                                                app.input_buffer.push(c);
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    app::ChatFocus::History => {
+                                        match key.code {
+                                            KeyCode::Char('j') | KeyCode::Down => {
+                                                if app.chat_scroll_offset > 0 {
+                                                    app.chat_scroll_offset -= 1;
+                                                }
+                                            }
+                                            KeyCode::Char('k') | KeyCode::Up => {
+                                                app.chat_scroll_offset += 1;
+                                            }
+                                            _ => {}
+                                        }
+                                    }
                                 }
                             }
-                            KeyCode::Backspace => {
-                                app.input_buffer.pop();
-                            }
-                            KeyCode::Char(c) => {
-                                app.input_buffer.push(c);
-                            }
-                            _ => {}
                         }
                     }
                 }

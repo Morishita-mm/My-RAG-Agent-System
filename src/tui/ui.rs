@@ -1,4 +1,4 @@
-use crate::tui::app::{App, TuiMode};
+use crate::tui::app::{App, TuiMode, ChatFocus};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -138,25 +138,60 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                         chat_lines.push(Line::from("")); // 空行挟む
                     }
 
-                    // 高さ調整
+                    // スクロールオフセットを考慮した切り出し
                     let total_lines = chat_lines.len();
-                    let start_idx = if total_lines > history_height {
+                    let max_offset = if total_lines > history_height {
                         total_lines - history_height
                     } else {
                         0
                     };
-                    let visible_lines = chat_lines[start_idx..].to_vec();
+                    let current_offset = app.chat_scroll_offset.min(max_offset);
+
+                    let start_idx = if total_lines > history_height {
+                        total_lines - history_height - current_offset
+                    } else {
+                        0
+                    };
+                    let end_idx = if total_lines > history_height {
+                        total_lines - current_offset
+                    } else {
+                        total_lines
+                    };
+                    let visible_lines = chat_lines[start_idx..end_idx].to_vec();
 
                     let project_name = app.projects.get(app.selected_project_index).map(|p| p.name.as_str()).unwrap_or("RAG Chat");
+                    
+                    // フォーカスに応じた枠線色とタイトルの切り替え
+                    let (history_border_color, history_title, input_border_color, input_title) = match app.chat_focus {
+                        ChatFocus::History => (
+                            Color::Cyan,
+                            format!(" 📖 NotebookLM RAG Chat: {} [SCROLL MODE - j/k to scroll, Tab to edit] ", project_name),
+                            Color::DarkGray,
+                            " Ask Question (Press Tab to Edit Prompt) ".to_string(),
+                        ),
+                        ChatFocus::Input => (
+                            Color::DarkGray,
+                            format!(" 📖 NotebookLM RAG Chat: {} [Press Tab to scroll history] ", project_name),
+                            Color::Yellow,
+                            " Ask Question (Type and Press Enter to Send, Tab to Scroll History) ".to_string(),
+                        ),
+                    };
+
                     let history_box = Paragraph::new(visible_lines)
-                        .block(Block::default().title(format!(" NotebookLM RAG Chat: {} ", project_name)).borders(Borders::ALL).border_style(Style::default().fg(Color::Green)))
+                        .block(Block::default()
+                            .title(history_title)
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(history_border_color).add_modifier(if app.chat_focus == ChatFocus::History { Modifier::BOLD } else { Modifier::empty() })))
                         .wrap(ratatui::widgets::Wrap { trim: true });
                     f.render_widget(history_box, chat_chunks[0]);
 
                     // 入力欄の描画
                     let cursor_char = if app.is_loading_chat { "⏳ Loading..." } else { "_" };
                     let input_paragraph = Paragraph::new(format!("> {}{}", app.input_buffer, cursor_char))
-                        .block(Block::default().title(" Ask Question (Press Enter to Send, Esc to Exit Chat) ").borders(Borders::ALL).border_style(Style::default().fg(Color::Yellow)));
+                        .block(Block::default()
+                            .title(input_title)
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(input_border_color).add_modifier(if app.chat_focus == ChatFocus::Input { Modifier::BOLD } else { Modifier::empty() })));
                     f.render_widget(input_paragraph, chat_chunks[1]);
                 }
             }
