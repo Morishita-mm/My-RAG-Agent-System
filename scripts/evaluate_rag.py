@@ -16,6 +16,32 @@ from mcp_server import search_dify_knowledge_internal
 # 環境変数ロード
 dotenv.load_dotenv(os.path.join(os.path.dirname(script_dir), ".env"))
 
+import logging
+
+# Set up log paths
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+log_dir = os.path.join(project_root, "logs")
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+log_file = os.path.join(log_dir, "evaluate_rag.log")
+
+# Configure logger and handlers
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+# File handler (always logs INFO level and above)
+file_handler = logging.FileHandler(log_file, encoding='utf-8')
+file_handler.setLevel(logging.INFO)
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+
+# Console handler (standard output/error) - mute INFO to keep progress bar clean
+console_handler = logging.StreamHandler(sys.stderr)
+console_handler.setLevel(logging.WARNING)
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 LITELLM_API_BASE = os.environ.get("LITELLM_API_BASE", "http://localhost:4000/v1")
 
@@ -81,7 +107,7 @@ def call_gemini_2_5_eval(query, reference, answer):
             text = res_data["choices"][0]["message"]["content"]
             return json.loads(text.strip())
     except Exception as e:
-        print(f"Failed to call Gemini 2.5 API via LiteLLM for evaluation: {e}")
+        logging.error(f"Failed to call Gemini 2.5 API via LiteLLM for evaluation: {e}")
         return {"evaluation": "Incorrect", "reason": f"Evaluation error: {e}"}
 
 def call_standard_rag(query, config):
@@ -158,7 +184,8 @@ def run_evaluation(limit=None, config_override=None):
     questions = dataset if isinstance(dataset, list) else dataset.get("questions", [])
     if limit:
         questions = questions[:limit]
-    print(f"Loaded {len(questions)} test questions.")
+
+    logging.info(f"Loaded {len(questions)} test questions.")
     
     sys_a_scores = []
     sys_b_scores = []
@@ -167,19 +194,27 @@ def run_evaluation(limit=None, config_override=None):
     
     results = []
     
-    for idx, q in enumerate(questions, 1):
+    try:
+        from tqdm import tqdm
+        has_tqdm = True
+    except ImportError:
+        has_tqdm = False
+
+    loop_iter = tqdm(questions, desc="Evaluating RAG accuracy", unit="query") if has_tqdm else questions
+    
+    for idx, q in enumerate(loop_iter, 1):
         query = q.get("query")
         reference = q.get("reference")
-        print(f"\n[{idx}/{len(questions)}] Processing Query: {query}")
+        logging.info(f"[{idx}/{len(questions)}] Processing Query: {query}")
         
         # System A (Standard RAG)
-        print("  Running System A (Standard RAG)...")
+        logging.info("  Running System A (Standard RAG)...")
         start_time_a = time.perf_counter()
         ans_a = call_standard_rag(query, config)
         latency_a = time.perf_counter() - start_time_a
         sys_a_latencies.append(latency_a)
         
-        print("  Evaluating System A response...")
+        logging.info("  Evaluating System A response...")
         eval_a = call_gemini_2_5_eval(query, reference, ans_a)
         score_a = score_mapping(eval_a.get("evaluation"))
         sys_a_scores.append(score_a)
@@ -191,13 +226,13 @@ def run_evaluation(limit=None, config_override=None):
         latency_b = 0.0
         
         if config.get("workflow_api_key"):
-            print("  Running System B (Dify Workflow)...")
+            logging.info("  Running System B (Dify Workflow)...")
             start_time_b = time.perf_counter()
             ans_b = call_workflow_rag(query, config)
             latency_b = time.perf_counter() - start_time_b
             sys_b_latencies.append(latency_b)
             
-            print("  Evaluating System B response...")
+            logging.info("  Evaluating System B response...")
             eval_b = call_gemini_2_5_eval(query, reference, ans_b)
             score_b = score_mapping(eval_b.get("evaluation"))
             sys_b_scores.append(score_b)

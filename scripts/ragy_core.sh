@@ -28,73 +28,79 @@ show_usage() {
   echo "  sync     Sync all markdown documents in ./docs to Dify dataset"
 }
 
+draw_progress() {
+  local step=$1
+  local total=$2
+  local msg=$3
+  local pct=$(( step * 100 / total ))
+  local filled=$(( step * 20 / total ))
+  local empty=$(( 20 - filled ))
+  local bar=""
+  # Use seq for drawing block bar
+  if [ $filled -gt 0 ]; then
+    for i in $(seq 1 $filled 2>/dev/null); do bar="${bar}█"; done
+  fi
+  if [ $empty -gt 0 ]; then
+    for i in $(seq 1 $empty 2>/dev/null); do bar="${bar}░"; done
+  fi
+}
+
 start_services() {
   cd "$PROJECT_DIR" || exit 1
-  echo "=== [1/5] Checking and Starting Ollama ==="
+  
+  draw_progress 0 7 "Checking Ollama..."
   if ! curl -s http://127.0.0.1:11434 >/dev/null; then
-    echo "Ollama is not running. Starting Ollama with OLLAMA_HOST=0.0.0.0..."
     OLLAMA_HOST=0.0.0.0 nohup ollama serve >/dev/null 2>&1 &
 
     for i in {1..15}; do
       if curl -s http://127.0.0.1:11434 >/dev/null; then
-        echo "Ollama started successfully."
         break
       fi
-      echo "Waiting for Ollama..."
+      draw_progress 0 7 "Waiting for Ollama ($i/15)..."
       sleep 1
     done
-  else
-    echo "Ollama is already running."
   fi
 
-  echo "=== [2/5] Checking Docker Runtime ==="
+  draw_progress 1 7 "Checking Docker..."
   if ! docker info >/dev/null 2>&1; then
-    echo "Docker is not running. Starting OrbStack..."
     open -a OrbStack
     while ! docker info >/dev/null 2>&1; do
-      echo "Waiting for Docker daemon..."
+      draw_progress 1 7 "Waiting for Docker daemon..."
       sleep 2
     done
-    echo "Docker is ready."
-  else
-    echo "Docker is already running."
   fi
 
-  echo "=== [3/5] Starting Docker Containers ==="
-  docker compose up -d
+  draw_progress 2 7 "Starting Docker Containers..."
+  docker compose up -d >/dev/null 2>&1
 
-  echo "=== [4/5] Starting Document Sync Script ==="
+  draw_progress 3 7 "Starting Document Sync Script..."
   SYNC_PID=$(pgrep -f "sync_docs.py")
   if [ -n "$SYNC_PID" ]; then
-    echo "Stopping existing sync_docs.py (PID: $SYNC_PID)..."
-    kill "$SYNC_PID"
+    kill "$SYNC_PID" >/dev/null 2>&1
     sleep 1
   fi
   nohup "$PYTHON_CMD" scripts/sync_docs.py >"$SYNC_LOG" 2>&1 &
-  echo "sync_docs.py started in background (Logging to $SYNC_LOG)."
 
-  echo "=== [5/5] Starting Deploy Webhook Listener ==="
+  draw_progress 4 7 "Starting Deploy Webhook Listener..."
   if [ "$AUTO_DEPLOY" = "1" ]; then
-    echo "Auto-deploy mode detected. Skipping deploy_listener.py stop."
     # 古い deploy_listener.py が完全に終了してポートを解放するのを最大10秒間待機します
     for i in {1..10}; do
       OLD_PID=$(pgrep -f "scripts/deploy_listener.py" | grep -v "$$" | head -n 1)
       if [ -z "$OLD_PID" ]; then
         break
       fi
-      echo "Waiting for old deploy_listener (PID: $OLD_PID) to exit and release port..."
+      draw_progress 4 7 "Waiting for old deploy_listener to release port ($i/10)..."
       sleep 1
     done
   elif [ -f "$PROJECT_DIR/logs/deploy_listener.pid" ]; then
     DEPLOY_PID=$(cat "$PROJECT_DIR/logs/deploy_listener.pid")
     if ps -p "$DEPLOY_PID" >/dev/null 2>&1; then
-      echo "Stopping existing deploy_listener.py (PID: $DEPLOY_PID)..."
-      kill "$DEPLOY_PID"
+      kill "$DEPLOY_PID" >/dev/null 2>&1
       for i in {1..10}; do
         if ! ps -p "$DEPLOY_PID" >/dev/null 2>&1; then
           break
         fi
-        echo "Waiting for old deploy_listener to exit..."
+        draw_progress 4 7 "Waiting for old deploy_listener to exit..."
         sleep 1
       done
     fi
@@ -102,8 +108,7 @@ start_services() {
   else
     DEPLOY_PID=$(pgrep -f "scripts/deploy_listener.py")
     if [ -n "$DEPLOY_PID" ]; then
-      echo "Stopping existing deploy_listener.py (PID: $DEPLOY_PID)..."
-      echo "$DEPLOY_PID" | xargs kill -9
+      echo "$DEPLOY_PID" | xargs kill -9 >/dev/null 2>&1
       for i in {1..10}; do
         STILL_RUNNING=$(pgrep -f "scripts/deploy_listener.py")
         if [ -z "$STILL_RUNNING" ]; then
@@ -114,25 +119,19 @@ start_services() {
     fi
   fi
   nohup "$PYTHON_CMD" scripts/deploy_listener.py >"$DEPLOY_LOG" 2>&1 &
-  echo "deploy_listener.py started in background (Logging to $DEPLOY_LOG)."
 
-  echo "=== [6/7] Starting Async Queue Worker ==="
+  draw_progress 5 7 "Starting Async Queue Worker..."
   if [ -f "$PROJECT_DIR/logs/worker.pid" ]; then
     WORKER_PID=$(cat "$PROJECT_DIR/logs/worker.pid")
     if ps -p "$WORKER_PID" >/dev/null 2>&1; then
-      echo "Stopping existing worker.py (PID: $WORKER_PID)..."
-      kill "$WORKER_PID"
+      kill "$WORKER_PID" >/dev/null 2>&1
       sleep 1
     fi
     rm -f "$PROJECT_DIR/logs/worker.pid"
   fi
   nohup "$PYTHON_CMD" scripts/worker.py >"$PROJECT_DIR/logs/worker.log" 2>&1 &
-  echo "worker.py started in background (Logging to $PROJECT_DIR/logs/worker.log)."
 
-  # --- Ngrokの起動のみを純粋に追加 ---
-  echo "=== [7/7] Starting Ngrok Tunnel ==="
-
-  # init_projectで実績のある抽出ロジックをそのまま流用
+  draw_progress 6 7 "Starting Ngrok Tunnel..."
   NGROK_DOMAIN=""
   if [ -f "$PROJECT_DIR/.env" ]; then
     local env_key=$(grep '^NGROK_DOMAIN=' "$PROJECT_DIR/.env" | cut -d '=' -f2- | tr -d '"' | tr -d "'")
@@ -143,19 +142,18 @@ start_services() {
 
   if command -v ngrok >/dev/null 2>&1; then
     if [ -n "$NGROK_DOMAIN" ]; then
-      echo "Starting ngrok tunnel with static domain: $NGROK_DOMAIN"
       nohup ngrok http --domain="$NGROK_DOMAIN" 8000 >/dev/null 2>&1 &
-      echo "Webhook URL: https://$NGROK_DOMAIN/webhook"
     else
-      echo "Starting ngrok tunnel with random domain..."
       nohup ngrok http 8000 >/dev/null 2>&1 &
     fi
-  else
-    echo "Warning: ngrok is not installed. Webhook tunnel will not be opened."
   fi
 
+  draw_progress 7 7 "All services started successfully!"
   echo ""
   echo "Successfully started all RAG services!"
+  if [ -n "$NGROK_DOMAIN" ]; then
+    echo "Webhook URL: https://$NGROK_DOMAIN/webhook"
+  fi
 }
 
 stop_services() {

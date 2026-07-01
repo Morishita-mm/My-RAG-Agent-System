@@ -13,19 +13,24 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 def encode_image_to_base64(image):
     buffered = BytesIO()
+    # JPEG does not support alpha channel (transparency). Convert RGBA/P/LA to RGB.
+    if image.mode in ('RGBA', 'P', 'LA'):
+        image = image.convert('RGB')
     image.save(buffered, format="JPEG")
     return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
 def analyze_image_with_vision(image, model_name=None) -> str:
     """Analyze page image using LiteLLM Vision API"""
     if model_name is None:
-        model_name = os.environ.get("VISION_MODEL", "gemini-1.5-flash")
+        model_name = os.environ.get("VISION_MODEL", "gemini-2.5-flash")
     base64_image = encode_image_to_base64(image)
     litellm_url = os.environ.get("LITELLM_API_BASE", "http://localhost:4000/v1")
     url = f"{litellm_url.rstrip('/')}/chat/completions"
     
+    api_key = os.environ.get("LITELLM_API_KEY", "sk-1234")
     headers = {
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
     }
     
     payload = {

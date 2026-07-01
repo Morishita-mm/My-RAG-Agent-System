@@ -13,7 +13,29 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Set up log paths
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+log_dir = os.path.join(project_root, "logs")
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+log_file = os.path.join(log_dir, "sync_docs.log")
+
+# Configure logger and handlers
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+# File handler (always logs INFO level and above)
+file_handler = logging.FileHandler(log_file, encoding='utf-8')
+file_handler.setLevel(logging.INFO)
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+
+# Console handler (standard output/error)
+console_handler = logging.StreamHandler(sys.stderr)
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
 
 class DifySyncHandler(FileSystemEventHandler):
     def __init__(self, watch_dir, api_base, api_key, dataset_id, meta_file=".dify_sync_meta.json", config_file=None):
@@ -218,6 +240,11 @@ class DifySyncHandler(FileSystemEventHandler):
             logging.info(f"Converting non-markdown file {file_path} to Markdown...")
             from document_parser import convert_document_to_markdown
             markdown_str = convert_document_to_markdown(file_path)
+            
+            if markdown_str.startswith("Error:"):
+                logging.error(f"Failed to convert document {file_path} to Markdown: {markdown_str}. Aborting upload.")
+                return
+                
             cache_path = self.get_parsed_cache_path(file_path)
             with open(cache_path, 'w', encoding='utf-8') as f_cache:
                 f_cache.write(markdown_str)
@@ -283,6 +310,11 @@ class DifySyncHandler(FileSystemEventHandler):
             logging.info(f"Re-converting modified non-markdown file {file_path} to Markdown...")
             from document_parser import convert_document_to_markdown
             markdown_str = convert_document_to_markdown(file_path)
+            
+            if markdown_str.startswith("Error:"):
+                logging.error(f"Failed to re-convert modified document {file_path} to Markdown: {markdown_str}. Aborting update.")
+                return
+                
             cache_path = self.get_parsed_cache_path(file_path)
             with open(cache_path, 'w', encoding='utf-8') as f_cache:
                 f_cache.write(markdown_str)
@@ -486,11 +518,23 @@ class DifySyncHandler(FileSystemEventHandler):
                 else:
                     logging.info(f"File unchanged. Skipping: {file_path}")
             
-            for future in as_completed(futures):
+            if futures:
                 try:
-                    future.result()
-                except Exception as e:
-                    logging.error(f"Error in parallel sync upload/update: {e}")
+                    from tqdm import tqdm
+                    pbar = tqdm(total=len(futures), desc="Syncing documents", unit="doc")
+                    for future in as_completed(futures):
+                        try:
+                            future.result()
+                        except Exception as e:
+                            logging.error(f"Error in parallel sync upload/update: {e}")
+                        pbar.update(1)
+                    pbar.close()
+                except ImportError:
+                    for future in as_completed(futures):
+                        try:
+                            future.result()
+                        except Exception as e:
+                            logging.error(f"Error in parallel sync upload/update: {e}")
 
         # 2. ローカルに存在せず、メタデータにあるファイルをDifyから削除
         futures = []
@@ -502,11 +546,23 @@ class DifySyncHandler(FileSystemEventHandler):
                         logging.info(f"File deleted locally. Deleting from Dify: {file_path}")
                         futures.append(executor.submit(self.delete_file, file_path, doc_id))
             
-            for future in as_completed(futures):
+            if futures:
                 try:
-                    future.result()
-                except Exception as e:
-                    logging.error(f"Error in parallel sync deletion: {e}")
+                    from tqdm import tqdm
+                    pbar = tqdm(total=len(futures), desc="Deleting obsolete documents", unit="doc")
+                    for future in as_completed(futures):
+                        try:
+                            future.result()
+                        except Exception as e:
+                            logging.error(f"Error in parallel sync deletion: {e}")
+                        pbar.update(1)
+                    pbar.close()
+                except ImportError:
+                    for future in as_completed(futures):
+                        try:
+                            future.result()
+                        except Exception as e:
+                            logging.error(f"Error in parallel sync deletion: {e}")
 
 def main():
     parser = argparse.ArgumentParser(description="Sync local markdown documents to Dify dataset.")
@@ -524,6 +580,8 @@ def main():
     event_handler = DifySyncHandler(watch_dir, api_base, api_key, dataset_id)
 
     if args.sync_project:
+        # One-shot mode is interactive; hide INFO logs from console to keep progress bar clean
+        console_handler.setLevel(logging.WARNING)
         try:
             event_handler.sync_project_once(args.sync_project)
         except Exception as e:
