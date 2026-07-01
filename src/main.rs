@@ -147,7 +147,116 @@ async fn main() -> io::Result<()> {
                 eprintln!("TUI Error: {}", e);
             }
         }
+        Commands::Doctor => {
+            run_doctor_diagnosis();
+        }
     }
 
     Ok(())
+}
+
+fn run_doctor_diagnosis() {
+    println!("=== Ragy Environment Diagnostics (Doctor) ===");
+
+    // 1. CLI ツールの存在確認
+    println!("\n[1] Checking Required CLI Tools...");
+    let cli_tools = vec![
+        ("docker", "--version"),
+        ("gh", "--version"),
+        ("ngrok", "--version"),
+        ("python3", "--version"),
+    ];
+
+    for (tool, version_flag) in cli_tools {
+        match Command::new("which").arg(tool).output() {
+            Ok(output) if output.status.success() => {
+                let version = if let Ok(v_out) = Command::new(tool).arg(version_flag).output() {
+                    let v_str = String::from_utf8_lossy(&v_out.stdout).trim().to_string();
+                    v_str.lines().next().unwrap_or("").to_string()
+                } else {
+                    "Unknown version".to_string()
+                };
+                println!("  \x1b[32m✔\x1b[0m {:<10}: Found ({})", tool, version);
+            }
+            _ => {
+                println!("  \x1b[31m✘\x1b[0m {:<10}: NOT Found", tool);
+            }
+        }
+    }
+
+    // 2. Python パッケージの依存チェック
+    println!("\n[2] Checking Python Library Dependencies...");
+    let python_libs = vec![
+        "fastapi",
+        "uvicorn",
+        "redis",
+        "langsmith",
+        "google.antigravity",
+    ];
+
+    for lib in python_libs {
+        let check_cmd = format!("import {}; print('OK')", lib);
+        match Command::new("python3").args(&["-c", &check_cmd]).output() {
+            Ok(output) if output.status.success() => {
+                println!("  \x1b[32m✔\x1b[0m {:<20}: Available", lib);
+            }
+            _ => {
+                println!("  \x1b[31m✘\x1b[0m {:<20}: NOT Available (Install via 'pip install' or 'uv pip install')", lib);
+            }
+        }
+    }
+
+    // 3. バインドポート競合チェック
+    println!("\n[3] Checking Bound Port Conflict (TCP)...");
+    let ports = vec![
+        ("LiteLLM Proxy", 4000),
+        ("Valkey/Redis", 6379),
+        ("Deploy Webhook", 8000),
+        ("Dify Gateway", 8080),
+    ];
+
+    for (name, port) in ports {
+        let addr = format!("127.0.0.1:{}", port);
+        if check_tcp_port(&addr) {
+            println!("  \x1b[33m⚠\x1b[0m Port {:<4} ({:<15}): Bound (Service running or port in use)", port, name);
+        } else {
+            println!("  \x1b[32m✔\x1b[0m Port {:<4} ({:<15}): Available", port, name);
+        }
+    }
+
+    // 4. 環境変数ファイルと必須項目の確認
+    println!("\n[4] Validating Configuration Files & Envs...");
+    let project_root = get_project_root();
+    let dotenv_path = project_root.join(".env");
+    if dotenv_path.exists() {
+        println!("  \x1b[32m✔\x1b[0m .env File : Found ({})", dotenv_path.to_string_lossy());
+        let env_keys = vec![
+            "REDIS_PASSWORD",
+            "DIFY_API_BASE",
+            "GITHUB_WEBHOOK_SECRET",
+        ];
+        for key in env_keys {
+            if let Ok(val) = std::env::var(key) {
+                if val.is_empty() {
+                    println!("    \x1b[33m⚠\x1b[0m Env {:<25}: Found, but value is EMPTY", key);
+                } else {
+                    println!("    \x1b[32m✔\x1b[0m Env {:<25}: Configured", key);
+                }
+            } else {
+                println!("    \x1b[31m✘\x1b[0m Env {:<25}: NOT Configured", key);
+            }
+        }
+    } else {
+        println!("  \x1b[31m✘\x1b[0m .env File : NOT Found (Prepare from envs/middleware.env.example)");
+    }
+
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/mzk".to_string());
+    let global_env_path = std::path::PathBuf::from(home).join(".ragy/env");
+    if global_env_path.exists() {
+        println!("  \x1b[32m✔\x1b[0m ~/.ragy/env File: Found");
+    } else {
+        println!("  \x1b[33m⚠\x1b[0m ~/.ragy/env File: NOT Found (Global config missing, using defaults)");
+    }
+
+    println!("\n=== Diagnostics Completed ===");
 }

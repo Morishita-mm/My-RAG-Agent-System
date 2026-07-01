@@ -21,6 +21,10 @@ PORT = int(os.environ.get("DEPLOY_LISTENER_PORT", 8000))
 
 def verify_signature(payload_body: bytes, signature_header: str) -> bool:
     if not WEBHOOK_SECRET:
+        ragy_env = os.environ.get("RAGY_ENV", "production").lower()
+        if ragy_env == "production":
+            logging.error("GITHUB_WEBHOOK_SECRET is not configured. Rejecting request in production mode.")
+            return False
         logging.warning("GITHUB_WEBHOOK_SECRET is not configured. Skipping signature verification (Not secure for production).")
         return True
         
@@ -118,6 +122,15 @@ if __name__ == "__main__":
     os.makedirs(os.path.dirname(pid_file), exist_ok=True)
     with open(pid_file, "w") as f:
         f.write(str(os.getpid()))
+        
+    # GITHUB_WEBHOOK_SECRETの必須チェック (RAGY_ENV=productionかつ未設定ならエラー終了)
+    ragy_env = os.environ.get("RAGY_ENV", "production").lower()
+    if not WEBHOOK_SECRET:
+        if ragy_env == "production":
+            logging.critical("FATAL: GITHUB_WEBHOOK_SECRET is not configured in production environment. Aborting startup for safety.")
+            sys.exit(1)
+        else:
+            logging.warning("WARNING: GITHUB_WEBHOOK_SECRET is not configured. Skipping signature verification (Running in INSECURE development mode).")
         
     try:
         uvicorn.run(app, host="0.0.0.0", port=PORT)

@@ -35,4 +35,7 @@ pub enum Commands {
     
     /// Start the interactive TUI Dashboard
     Tui,
+
+    /// Diagnose system environment and dependencies
+    Doctor,
 }
