@@ -210,8 +210,29 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     f.render_widget(history_box, chat_chunks[0]);
 
                     // 入力欄の描画
-                    let cursor_char = if app.is_loading_chat { "⏳ Loading..." } else { "_" };
-                    let input_paragraph = Paragraph::new(format!("> {}{}", app.input_buffer, cursor_char))
+                    let input_text = if app.is_loading_chat {
+                        let ms = std::time::SystemTime::now()
+                            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis();
+                        let spinner_idx = (ms / 150) % 4;
+                        let spinner = match spinner_idx {
+                            0 => "⠋",
+                            1 => "⠙",
+                            2 => "⠹",
+                            _ => "⠸",
+                        };
+                        let status = if app.chat_status.is_empty() {
+                            "Processing..."
+                        } else {
+                            &app.chat_status
+                        };
+                        format!(" {} {} ", spinner, status)
+                    } else {
+                        format!("> {}{}", app.input_buffer, "_")
+                    };
+
+                    let input_paragraph = Paragraph::new(input_text)
                         .block(Block::default()
                             .title(input_title)
                             .borders(Borders::ALL)

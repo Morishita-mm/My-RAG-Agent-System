@@ -41,12 +41,17 @@ pub async fn run_tui() -> Result<(), Box<dyn Error>> {
 
         // 非同期チャット回答の受信
         while let Ok(reply) = chat_rx.try_recv() {
-            app.chat_history.push(ChatMessage {
-                is_user: false,
-                content: reply,
-            });
-            app.is_loading_chat = false;
-            app.status_message = "RAG reply received.".to_string();
+            if reply.starts_with("[STATUS]") {
+                app.chat_status = reply.trim_start_matches("[STATUS]").to_string();
+            } else {
+                app.chat_history.push(ChatMessage {
+                    is_user: false,
+                    content: reply,
+                });
+                app.is_loading_chat = false;
+                app.chat_status.clear();
+                app.status_message = "RAG reply received.".to_string();
+            }
         }
 
         // 定期的に Redis 状態を更新 (5秒おき)

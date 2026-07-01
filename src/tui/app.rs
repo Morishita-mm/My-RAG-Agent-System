@@ -69,6 +69,7 @@ pub struct App {
     pub is_loading_chat: bool,
     pub chat_focus: ChatFocus,
     pub chat_scroll_offset: usize,
+    pub chat_status: String,
 }
 
 fn log_tui_debug(msg: &str) {
@@ -113,6 +114,7 @@ impl App {
             is_loading_chat: false,
             chat_focus: ChatFocus::Input,
             chat_scroll_offset: 0,
+            chat_status: String::new(),
         }
     }
 
@@ -628,6 +630,7 @@ impl App {
             let max_loops = 3;
 
             for loop_idx in 1..=max_loops {
+                let _ = tx.send(format!("[STATUS]Searching dataset (Loop {}/{})...", loop_idx, max_loops)).await;
                 log_tui_debug(&format!("[Loop {}/{}] Searching for: '{}'", loop_idx, max_loops, current_query));
                 
                 let retrieve_res = client.post(&retrieve_url)
@@ -713,6 +716,7 @@ impl App {
                 let decision = if raw_context.is_empty() {
                     "NO".to_string()
                 } else {
+                    let _ = tx.send(format!("[STATUS]Grading relevance (Loop {}/{})...", loop_idx, max_loops)).await;
                     let d = grade_sufficiency(&client, &litellm_url, &query, &raw_context).await;
                     log_tui_debug(&format!("  -> Sufficiency Grade: {}", d));
                     d
@@ -722,6 +726,7 @@ impl App {
                     break;
                 }
 
+                let _ = tx.send(format!("[STATUS]Optimizing query (Loop {}/{})...", loop_idx, max_loops)).await;
                 current_query = rewrite_query(&client, &litellm_url, &query, &raw_context).await;
                 log_tui_debug(&format!("  -> Rewritten Query: '{}'", current_query));
             }
@@ -740,6 +745,7 @@ impl App {
             let litellm_url = format!("{}/chat/completions", litellm_base);
             
             // クエリ難易度の自動分類とモデル決定 (Routing)
+            let _ = tx.send("[STATUS]Classifying query difficulty...".to_string()).await;
             let difficulty = classify_query_difficulty(&client, &litellm_url, &query).await;
             let local_model = std::env::var("RAGY_LOCAL_MODEL")
                 .unwrap_or_else(|_| "qwen2.5-coder".to_string());
@@ -753,6 +759,8 @@ impl App {
                 log_tui_debug(&format!("  -> [Routing] Query classified as 'ADVANCED'. Routing final answer to cloud model '{}'.", cloud_model));
                 cloud_model.clone()
             };
+
+            let _ = tx.send(format!("[STATUS]Synthesizing answer using {}...", target_model)).await;
 
             let chat_payload = serde_json::json!({
                 "model": target_model,
@@ -969,8 +977,13 @@ mod tests {
         // 非同期回答がモックサーバーから回収されるのを待機 (最長3秒)
         let mut received_reply = None;
         for _ in 0..30 {
-            if let Ok(reply) = chat_rx.try_recv() {
-                received_reply = Some(reply);
+            while let Ok(reply) = chat_rx.try_recv() {
+                if !reply.starts_with("[STATUS]") {
+                    received_reply = Some(reply);
+                    break;
+                }
+            }
+            if received_reply.is_some() {
                 break;
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -1025,8 +1038,13 @@ mod tests {
         // リアルな LLM からの応答を最大 40 秒間待機
         let mut received_reply = None;
         for _ in 0..400 {
-            if let Ok(reply) = chat_rx.try_recv() {
-                received_reply = Some(reply);
+            while let Ok(reply) = chat_rx.try_recv() {
+                if !reply.starts_with("[STATUS]") {
+                    received_reply = Some(reply);
+                    break;
+                }
+            }
+            if received_reply.is_some() {
                 break;
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
