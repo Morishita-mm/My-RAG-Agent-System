@@ -33,7 +33,7 @@ graph TD
     end
 
     subgraph CoreInfrastructure [インフラストラクチャ]
-        Redis[(Redis Queue & Cache)]
+        Redis[(Redis / Valkey Queue & Cache)]
         Dify[Dify Engine v1.15.0]
         Ollama[Ollama Local LLM]
         Gemini[Gemini Cloud API]
@@ -74,7 +74,7 @@ graph TD
 * Rust（`ratatui` + `crossterm`）で実装された豪華なターミナルダッシュボードを搭載。
 * **NotebookLM風 RAG チャットパネル**: 選択されたアクティブプロジェクトと、Difyナレッジベース、ローカルLLM Proxyをシームレスに繋ぐチャット対話インターフェース。
 * **リアルタイム非同期進捗インジケータ**: 自己補正ループやルーティング判定フェーズの切り替えをリアルタイムで検知し、回転アニメーションスピナー（⠋ ⠙ ⠹ ⠸）とともに詳細ステータスを表示。
-* **リアルタイム統計・キャッシュ管理**: Redisキャッシュのヒット率、Exact/Semanticキャッシュの保持件数のモニタリングや、キー1つでのRedisキャッシュパージ。
+* **リアルタイム統計・キャッシュ管理**: Redis / Valkeyキャッシュのヒット率、Exact/Semanticキャッシュの保持件数のモニタリングや、キー1つでのキャッシュパージ。
 * **高精度な日本語スクロール表示**: 全角・半角混在テキストの折返しをリアルタイム計算し、1行単位で正確にVimキー（j/k）スクロール・自動スクロール追従が可能なバッファロジックを自作。
 
 ### 2. 🧠 Self-Corrective RAG & Hybrid Routing (自己補正・高度ハイブリッドルーティング)
@@ -100,21 +100,32 @@ graph TD
 * Difyから取得したセグメント群をスコア順にソートし、高スコアのドキュメントを先頭と末尾に、低スコアのものを中間に配置（`[Rank 1, Rank 3, Rank 5, Rank 4, Rank 2]`）。
 * このコンテキスト最適化は、Python (MCP/CLI) および Rust (TUI) の両システムに同一仕様で適用され、回答の事実性を極限まで高めます。
 
-### 3. 🖼️ Multimodal Document Parsing (Vision OCR標準化)
+### 5. 🖼️ Multimodal Document Parsing (Vision OCR標準化)
 
 * テキスト、`.pdf`（スキャンPDF含む）、`.docx`、`.xlsx` の自動マークダウン変換に加え、**`.png`, `.jpg`, `.jpeg` などの画像ファイルを直接サポート**。
 * Pillow（PIL）および LiteLLM Vision API を介し、システム構成図やUML、スクリーンショットなどの図表から高精度なMarkdown構造化テキストを自律生成してDifyへアップロード・同期。
 
-### 4. 🧪 Automated Quantitative Evaluation (定量的RAG自動評価)
+### 6. 🧪 Automated Quantitative Evaluation (定量的RAG自動評価)
 
 * RAGシステムの精度をコミット単位で保証するため、**定量的評価モデルを CI/CD テストループへ統合**。
 * テスト用正解データセット (`tests/evaluation_dataset.json`) の質問に対し、LLM（Gemini）が回答を `Perfect` (+1.0), `Acceptable` (+0.5), `Missing` (0.0), `Incorrect` (-1.0) の4段階で厳格アサート。
 * 評価結果レポート（Markdown）と時系列メトリクス（CSV）を自動追記・生成（`~/agents/reports/`）。
 
-### 5. 🛠️ Self-Healing Code Agents (`agent_healer.py`)
+### 7. 🛠️ Self-Healing Code Agents (`agent_healer.py`)
 
 * 本番・監視ログから例外（Traceback）を検知すると自律エージェントが起動。
 * ソースコードを抽象構文木（AST）レベルで解析し、原因箇所を特定。自動的に修正パッチを適用してGitHubのPull Requestまでを人間を介さず全自動で発行。
+
+### 8. 🔄 Smart Project Sync & Template Initialization (スマート同期・自動初期化)
+
+* **MD5ハッシュ差分同期**: `ragy sync` は `.dify_sync_meta.json` にドキュメントのMD5ハッシュを記録・照合し、変更があったファイルのみを Dify にアップロードします。不要なAPIコールとネットワークトラフィックを最小限に抑制します。
+* **設定テンプレートの自動展開**: `ragy init` を実行することで、対象ディレクトリ配下にドキュメント用の `docs/` ディレクトリと Dify データセットのマッピングを作成し、さらに `aider` や `continue` 用の設定テンプレートを自動生成・置換します。
+* **プロジェクト分離型セマンティックキャッシュ**: セマンティックキャッシュ of 照会・保存時、同一の質問であってもプロジェクト名（`CURRENT_PROJECT`）でキャッシュキー空間を厳密に分離し、開発環境間でのキャッシュ汚染を防止します。
+
+### 9. 📊 LLM Traceability with LangSmith (LLMトレーサビリティ)
+
+* **LangSmithによるトレースの統合**: MCP サーバー（`mcp_server.py`）経由での RAG 検索・クエリ処理は、LangSmith を通じてリアルタイムにトレース可能です。検索時の入力クエリ、Dify から取得したドキュメントセグメント、スコアをダッシュボード上で可視化し、精度検証やボトルネックの特定を強力にサポートします。
+
 
 ---
 
@@ -223,6 +234,25 @@ ragy tui
   画像、Word、Excelなどのドキュメントが watchdog によって検知され、非同期でDifyへパース＆アップロードされる同期イベントを記録。
 * **`logs/worker.log`**:
   Redisにキューイングされたタスクの、キューワーカーによる非同期並列実行トレースを記録。
+* **`logs/deploy.log`**:
+  GitHub Webhook トリガーによる自動デプロイ（`deploy_listener.py`）の実行トレースおよび `./ragy restart` のログを記録。
+
+---
+
+## 📈 自動デプロイとベンチマーク
+
+### 1. 自動デプロイ Webhook 設定 (`deploy_listener.py`)
+GitHub の `push` / `pull_request` イベントをトリガーに自動デプロイを走らせる FastAPI サーバー（ポート `8000`）が同梱されています。
+1. `.env` に `GITHUB_WEBHOOK_SECRET` および `DEPLOY_LISTENER_PORT=8000` を設定します。
+2. GitHub のリポジトリ設定から Webhook URL（例: ngrok などのパブリックURL `/webhook`）を登録します。
+3. `ragy start` を実行すると、バックグラウンドで `deploy_listener.py` が自動的に起動します。
+
+### 2. 同期パフォーマンスベンチマーク (`benchmark_rag.py`)
+大量ファイルの一括処理やパースの性能を定量的・負荷的に測定するためのベンチマークツールが付属しています。
+```bash
+python3 scripts/benchmark_rag.py
+```
+上記を実行することで、一時的にダミーのWordやPDFドキュメントを生成し、Difyへのアップロードから実同期にかかる速度を計測して [benchmark_results.md](./benchmark_results.md) を自動更新・出力します。※実行完了後、一時ファイルやアップロードされたドキュメントは自動クリーンアップされます。
 
 ---
 
