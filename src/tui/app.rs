@@ -89,6 +89,12 @@ fn log_tui_debug(msg: &str) {
 }
 
 impl App {
+    fn redis_client(&self) -> Result<redis::Client, redis::RedisError> {
+        let redis_url = std::env::var("REDIS_URL")
+            .unwrap_or_else(|_| "redis://:difyai123456@127.0.0.1:6379".to_string());
+        redis::Client::open(redis_url)
+    }
+
     pub fn new() -> Self {
         let project_root = get_project_root();
         Self {
@@ -138,11 +144,17 @@ impl App {
         let mut meta_map: HashMap<String, Value> = HashMap::new();
         if meta_path.exists() {
             if let Ok(content) = fs::read_to_string(&meta_path) {
-                if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&content) {
-                    for (k, v) in map {
-                        meta_map.insert(k, v);
-                    }
+                if let Ok(map) = serde_json::from_str::<HashMap<String, Value>>(&content) {
+                    meta_map = map;
                 }
+            }
+        }
+
+        // ディスクI/O canonicalize の事前キャッシュによるO(N + M)への高速化
+        let mut synced_paths = std::collections::HashSet::new();
+        for meta_path_str in meta_map.keys() {
+            if let Ok(abs_meta_path) = fs::canonicalize(self.project_root.join(meta_path_str)) {
+                synced_paths.insert(abs_meta_path.to_string_lossy().to_string());
             }
         }
 
@@ -192,17 +204,9 @@ impl App {
                         let mut pending_files = 0;
 
                         for local_file in &local_files {
-                            let mut found = false;
-                            for (meta_path_str, _) in &meta_map {
-                                if let Ok(abs_meta_path) = fs::canonicalize(self.project_root.join(meta_path_str)) {
-                                    if abs_meta_path.to_string_lossy().to_string() == *local_file {
-                                        synced_files += 1;
-                                        found = true;
-                                        break;
-                                    }
-                                }
-                            }
-                            if !found {
+                            if synced_paths.contains(local_file) {
+                                synced_files += 1;
+                            } else {
                                 pending_files += 1;
                             }
                         }
@@ -226,7 +230,7 @@ impl App {
     }
 
     pub async fn fetch_redis_stats(&mut self) {
-        let client_res = redis::Client::open("redis://:difyai123456@127.0.0.1:6379");
+        let client_res = self.redis_client();
         match client_res {
             Ok(client) => {
                 if let Ok(mut con) = client.get_tokio_connection().await {
@@ -256,7 +260,7 @@ impl App {
     }
 
     pub async fn clear_project_cache(&mut self) {
-        let client_res = redis::Client::open("redis://:difyai123456@127.0.0.1:6379");
+        let client_res = self.redis_client();
         if let Ok(client) = client_res {
             if let Ok(mut con) = client.get_tokio_connection().await {
                 let exact_keys: Vec<String> = redis::cmd("KEYS")
