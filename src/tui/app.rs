@@ -771,7 +771,7 @@ impl App {
                 "messages": [
                     {
                         "role": "system",
-                        "content": "You are a helpful coding assistant. Use the provided context to answer the user's question accurately. If you don't know the answer based on the context, say so."
+                        "content": "You are a helpful coding assistant. Use the provided context to answer the user's question accurately. You MUST write your entire response in Japanese. If you do not know the answer based on the context, say '情報がありません'."
                     },
                     {
                         "role": "user",
@@ -826,7 +826,7 @@ impl App {
                     "messages": [
                         {
                             "role": "system",
-                            "content": "You are a helpful coding assistant. Use the provided context to answer the user's question accurately. If you don't know the answer based on the context, say so."
+                            "content": "You are a helpful coding assistant. Use the provided context to answer the user's question accurately. You MUST write your entire response in Japanese. If you do not know the answer based on the context, say '情報がありません'."
                         },
                         {
                             "role": "user",
