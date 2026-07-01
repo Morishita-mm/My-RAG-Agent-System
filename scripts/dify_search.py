@@ -69,23 +69,38 @@ Return one of the following decisions as a single word:
 
 Decision (YES/NO/PARTIAL):"""
 
+    local_model = os.environ.get("RAGY_LOCAL_MODEL", "qwen2.5-coder")
+    cloud_model = os.environ.get("RAGY_LLM_MODEL", "gemini-2.5-flash")
+
+    # 1. ローカルモデルでの試行
     payload = {
-        "model": "qwen2.5-coder",
+        "model": local_model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.0
     }
     try:
+        response = requests.post(url, headers=headers, json=payload, timeout=12)
+        if response.status_code == 200:
+            decision = response.json()["choices"][0]["message"]["content"].strip().upper()
+            if "YES" in decision: return "YES"
+            if "NO" in decision: return "NO"
+            if "PARTIAL" in decision: return "PARTIAL"
+    except Exception:
+        pass
+
+    # 2. クラウドモデルへのフォールバック試行
+    print(f"  -> [Fallback] Local model '{local_model}' failed for grading. Trying cloud model '{cloud_model}'...")
+    payload["model"] = cloud_model
+    try:
         response = requests.post(url, headers=headers, json=payload, timeout=15)
         if response.status_code == 200:
             decision = response.json()["choices"][0]["message"]["content"].strip().upper()
-            if "YES" in decision:
-                return "YES"
-            elif "NO" in decision:
-                return "NO"
-            elif "PARTIAL" in decision:
-                return "PARTIAL"
+            if "YES" in decision: return "YES"
+            if "NO" in decision: return "NO"
+            if "PARTIAL" in decision: return "PARTIAL"
     except Exception:
         pass
+
     return "PARTIAL"
 
 
@@ -106,17 +121,32 @@ Only output the rewritten search query. Do not add any explanation, quotation ma
 
 Optimized Search Query:"""
 
+    local_model = os.environ.get("RAGY_LOCAL_MODEL", "qwen2.5-coder")
+    cloud_model = os.environ.get("RAGY_LLM_MODEL", "gemini-2.5-flash")
+
+    # 1. ローカルモデルでの試行
     payload = {
-        "model": "qwen2.5-coder",
+        "model": local_model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.3
     }
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=12)
+        if response.status_code == 200:
+            return response.json()["choices"][0]["message"]["content"].strip().strip('"').strip("'")
+    except Exception:
+        pass
+
+    # 2. クラウドモデルへのフォールバック試行
+    print(f"  -> [Fallback] Local model '{local_model}' failed for rewriting. Trying cloud model '{cloud_model}'...")
+    payload["model"] = cloud_model
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=15)
         if response.status_code == 200:
             return response.json()["choices"][0]["message"]["content"].strip().strip('"').strip("'")
     except Exception:
         pass
+
     return query
 
 

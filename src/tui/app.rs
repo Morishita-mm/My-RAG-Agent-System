@@ -355,7 +355,6 @@ impl App {
             async fn grade_sufficiency(
                 client: &reqwest::Client,
                 litellm_url: &str,
-                model: &str,
                 query: &str,
                 context: &str,
             ) -> String {
@@ -373,8 +372,14 @@ impl App {
                     context, query
                 );
 
+                let local_model = std::env::var("RAGY_LOCAL_MODEL")
+                    .unwrap_or_else(|_| "qwen2.5-coder".to_string());
+                let cloud_model = std::env::var("RAGY_LLM_MODEL")
+                    .unwrap_or_else(|_| "gemini-2.5-flash".to_string());
+
+                // 1. ローカルモデルでの試行
                 let payload = serde_json::json!({
-                    "model": model,
+                    "model": local_model,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.0
                 });
@@ -395,17 +400,46 @@ impl App {
                                 .and_then(|s| s.as_str())
                             {
                                 let decision = content.trim().to_uppercase();
-                                if decision.contains("YES") {
-                                    return "YES".to_string();
-                                } else if decision.contains("NO") {
-                                    return "NO".to_string();
-                                } else if decision.contains("PARTIAL") {
-                                    return "PARTIAL".to_string();
-                                }
+                                if decision.contains("YES") { return "YES".to_string(); }
+                                if decision.contains("NO") { return "NO".to_string(); }
+                                if decision.contains("PARTIAL") { return "PARTIAL".to_string(); }
                             }
                         }
                     }
                 }
+
+                // 2. クラウドモデルへのフォールバック
+                log_tui_debug(&format!("  -> [Fallback] Local model '{}' failed for grading. Trying cloud model '{}'...", local_model, cloud_model));
+                let payload_fallback = serde_json::json!({
+                    "model": cloud_model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.0
+                });
+
+                if let Ok(res) = client.post(litellm_url)
+                    .header("Authorization", "Bearer sk-1234")
+                    .json(&payload_fallback)
+                    .send()
+                    .await
+                {
+                    if res.status().is_success() {
+                        if let Ok(val) = res.json::<Value>().await {
+                            if let Some(content) = val.get("choices")
+                                .and_then(|c| c.as_array())
+                                .and_then(|a| a.first())
+                                .and_then(|f| f.get("message"))
+                                .and_then(|m| m.get("content"))
+                                .and_then(|s| s.as_str())
+                            {
+                                let decision = content.trim().to_uppercase();
+                                if decision.contains("YES") { return "YES".to_string(); }
+                                if decision.contains("NO") { return "NO".to_string(); }
+                                if decision.contains("PARTIAL") { return "PARTIAL".to_string(); }
+                            }
+                        }
+                    }
+                }
+
                 "PARTIAL".to_string()
             }
 
@@ -413,7 +447,6 @@ impl App {
             async fn rewrite_query(
                 client: &reqwest::Client,
                 litellm_url: &str,
-                model: &str,
                 query: &str,
                 context: &str,
             ) -> String {
@@ -428,8 +461,14 @@ impl App {
                     query, context
                 );
 
+                let local_model = std::env::var("RAGY_LOCAL_MODEL")
+                    .unwrap_or_else(|_| "qwen2.5-coder".to_string());
+                let cloud_model = std::env::var("RAGY_LLM_MODEL")
+                    .unwrap_or_else(|_| "gemini-2.5-flash".to_string());
+
+                // 1. ローカルモデルでの試行
                 let payload = serde_json::json!({
-                    "model": model,
+                    "model": local_model,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.3
                 });
@@ -454,6 +493,36 @@ impl App {
                         }
                     }
                 }
+
+                // 2. クラウドモデルへのフォールバック
+                log_tui_debug(&format!("  -> [Fallback] Local model '{}' failed for rewriting. Trying cloud model '{}'...", local_model, cloud_model));
+                let payload_fallback = serde_json::json!({
+                    "model": cloud_model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.3
+                });
+
+                if let Ok(res) = client.post(litellm_url)
+                    .header("Authorization", "Bearer sk-1234")
+                    .json(&payload_fallback)
+                    .send()
+                    .await
+                {
+                    if res.status().is_success() {
+                        if let Ok(val) = res.json::<Value>().await {
+                            if let Some(content) = val.get("choices")
+                                .and_then(|c| c.as_array())
+                                .and_then(|a| a.first())
+                                .and_then(|f| f.get("message"))
+                                .and_then(|m| m.get("content"))
+                                .and_then(|s| s.as_str())
+                            {
+                                return content.trim().trim_matches('"').trim_matches('\'').to_string();
+                            }
+                        }
+                    }
+                }
+
                 query.to_string()
             }
             
@@ -468,9 +537,6 @@ impl App {
                 .unwrap_or_else(|_| "http://localhost:4000/v1".to_string());
             let litellm_url = format!("{}/chat/completions", litellm_base);
             
-            let llm_model = std::env::var("RAGY_LLM_MODEL")
-                .unwrap_or_else(|_| "gemini-2.5-flash".to_string());
-
             log_tui_debug(&format!("=== NEW CHAT QUERY: '{}' (Project: {}) ===", query, project.name));
             log_tui_debug(&format!("Dify Retrieve URL: {}", retrieve_url));
             log_tui_debug(&format!("LiteLLM URL: {}", litellm_url));
@@ -566,7 +632,7 @@ impl App {
                 let decision = if raw_context.is_empty() {
                     "NO".to_string()
                 } else {
-                    let d = grade_sufficiency(&client, &litellm_url, &llm_model, &query, &raw_context).await;
+                    let d = grade_sufficiency(&client, &litellm_url, &query, &raw_context).await;
                     log_tui_debug(&format!("  -> Sufficiency Grade: {}", d));
                     d
                 };
@@ -575,7 +641,7 @@ impl App {
                     break;
                 }
 
-                current_query = rewrite_query(&client, &litellm_url, &llm_model, &query, &raw_context).await;
+                current_query = rewrite_query(&client, &litellm_url, &query, &raw_context).await;
                 log_tui_debug(&format!("  -> Rewritten Query: '{}'", current_query));
             }
 
