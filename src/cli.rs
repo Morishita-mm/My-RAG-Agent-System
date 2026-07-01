@@ -38,4 +38,10 @@ pub enum Commands {
 
     /// Diagnose system environment and dependencies
     Doctor,
+
+    /// Initialize current directory for RAG (Creates dataset & symlink)
+    Init {
+        /// Optional pre-existing Dify dataset ID. If not provided, a new dataset will be created dynamically via Dify API.
+        dataset_id: Option<String>,
+    },
 }

@@ -150,6 +150,14 @@ async fn main() -> io::Result<()> {
         Commands::Doctor => {
             run_doctor_diagnosis();
         }
+        Commands::Init { dataset_id } => {
+            let args_vec = if let Some(ref id) = dataset_id {
+                vec![id.as_str()]
+            } else {
+                vec![]
+            };
+            let _ = run_core_command("init", &args_vec);
+        }
     }
 
     Ok(())
