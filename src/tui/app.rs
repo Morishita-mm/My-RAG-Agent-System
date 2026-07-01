@@ -525,6 +525,90 @@ impl App {
 
                 query.to_string()
             }
+
+            // クエリ難易度判定 (Classifier)
+            async fn classify_query_difficulty(
+                client: &reqwest::Client,
+                litellm_url: &str,
+                query: &str,
+            ) -> String {
+                let prompt = format!(
+                    "Determine if the user's question requires advanced coding capability, complex logic analysis, or detailed system architectural design.\n\
+                    Return exactly \"ADVANCED\" if it is complex, or \"SIMPLE\" if it is a simple greeting, generic question, basic coding term explanation, or trivial query.\n\
+                    Do not output any other words.\n\n\
+                    [Question]\n\
+                    {}\n\n\
+                    Decision (ADVANCED/SIMPLE):",
+                    query
+                );
+
+                let local_model = std::env::var("RAGY_LOCAL_MODEL")
+                    .unwrap_or_else(|_| "qwen2.5-coder".to_string());
+                let cloud_model = std::env::var("RAGY_LLM_MODEL")
+                    .unwrap_or_else(|_| "gemini-2.5-flash".to_string());
+
+                // 1. ローカルモデルでの試行
+                let payload = serde_json::json!({
+                    "model": local_model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.0
+                });
+
+                if let Ok(res) = client.post(litellm_url)
+                    .header("Authorization", "Bearer sk-1234")
+                    .json(&payload)
+                    .send()
+                    .await
+                {
+                    if res.status().is_success() {
+                        if let Ok(val) = res.json::<Value>().await {
+                            if let Some(content) = val.get("choices")
+                                .and_then(|c| c.as_array())
+                                .and_then(|a| a.first())
+                                .and_then(|f| f.get("message"))
+                                .and_then(|m| m.get("content"))
+                                .and_then(|s| s.as_str())
+                            {
+                                let decision = content.trim().to_uppercase();
+                                if decision.contains("SIMPLE") { return "SIMPLE".to_string(); }
+                                if decision.contains("ADVANCED") { return "ADVANCED".to_string(); }
+                            }
+                        }
+                    }
+                }
+
+                // 2. クラウドモデルへのフォールバック
+                log_tui_debug(&format!("  -> [Fallback] Local model '{}' failed for difficulty classification. Trying cloud model '{}'...", local_model, cloud_model));
+                let payload_fallback = serde_json::json!({
+                    "model": cloud_model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.0
+                });
+
+                if let Ok(res) = client.post(litellm_url)
+                    .header("Authorization", "Bearer sk-1234")
+                    .json(&payload_fallback)
+                    .send()
+                    .await
+                {
+                    if res.status().is_success() {
+                        if let Ok(val) = res.json::<Value>().await {
+                            if let Some(content) = val.get("choices")
+                                .and_then(|c| c.as_array())
+                                .and_then(|a| a.first())
+                                .and_then(|f| f.get("message"))
+                                .and_then(|m| m.get("content"))
+                                .and_then(|s| s.as_str())
+                            {
+                                let decision = content.trim().to_uppercase();
+                                if decision.contains("SIMPLE") { return "SIMPLE".to_string(); }
+                            }
+                        }
+                    }
+                }
+
+                "ADVANCED".to_string()
+            }
             
             // 1. Dify Retrieval API でコンテキストを取得
             let rerank_enabled = std::env::var("RAGY_RERANK_ENABLE")
@@ -658,11 +742,23 @@ impl App {
                 .unwrap_or_else(|_| "http://localhost:4000/v1".to_string());
             let litellm_url = format!("{}/chat/completions", litellm_base);
             
-            let llm_model = std::env::var("RAGY_LLM_MODEL")
+            // クエリ難易度の自動分類とモデル決定 (Routing)
+            let difficulty = classify_query_difficulty(&client, &litellm_url, &query).await;
+            let local_model = std::env::var("RAGY_LOCAL_MODEL")
+                .unwrap_or_else(|_| "qwen2.5-coder".to_string());
+            let cloud_model = std::env::var("RAGY_LLM_MODEL")
                 .unwrap_or_else(|_| "gemini-2.5-flash".to_string());
 
+            let target_model = if difficulty == "SIMPLE" {
+                log_tui_debug(&format!("  -> [Routing] Query classified as 'SIMPLE'. Routing final answer to local model '{}'.", local_model));
+                local_model.clone()
+            } else {
+                log_tui_debug(&format!("  -> [Routing] Query classified as 'ADVANCED'. Routing final answer to cloud model '{}'.", cloud_model));
+                cloud_model.clone()
+            };
+
             let chat_payload = serde_json::json!({
-                "model": llm_model,
+                "model": target_model,
                 "messages": [
                     {
                         "role": "system",
@@ -677,13 +773,15 @@ impl App {
             log_tui_debug(&format!("LiteLLM URL: {}", litellm_url));
             log_tui_debug(&format!("LiteLLM Payload: {}", chat_payload));
 
+            let mut final_reply = None;
+
             let chat_res = client.post(&litellm_url)
                 .header("Authorization", "Bearer sk-1234")
                 .json(&chat_payload)
                 .send()
                 .await;
 
-            let reply_content = match chat_res {
+            match chat_res {
                 Ok(res) => {
                     let status = res.status();
                     log_tui_debug(&format!("LiteLLM Response Status: {}", status));
@@ -695,26 +793,58 @@ impl App {
                                 .and_then(|a| a.first())
                                 .and_then(|f| f.get("message"))
                                 .and_then(|m| m.get("content"))
-                                .and_then(|s| s.as_str()) {
-                                    content.to_string()
-                                } else {
-                                    format!("Error: Unexpected LLM Response Format: {:?}", val)
-                                }
-                        } else {
-                            log_tui_debug("Error: Failed to parse LLM Response JSON.");
-                            "Error: Failed to parse LLM Response JSON.".to_string()
+                                .and_then(|s| s.as_str())
+                            {
+                                final_reply = Some(content.to_string());
+                            }
                         }
-                    } else {
-                        let err_text = res.text().await.unwrap_or_default();
-                        log_tui_debug(&format!("LiteLLM Proxy HTTP Error {}: {}", status, err_text));
-                        format!("LLM Proxy HTTP Error {}: {}", status, err_text)
                     }
                 }
                 Err(e) => {
                     log_tui_debug(&format!("LiteLLM Proxy Connect Error: {}", e));
-                    format!("LLM Proxy Connect Error: {}", e)
                 }
-            };
+            }
+
+            // ローカルで失敗した場合、クラウドへ自動フォールバック
+            if final_reply.is_none() && target_model == local_model {
+                log_tui_debug(&format!("  -> [Fallback] Final answer generation failed on local model '{}'. Routing final answer to cloud model '{}'.", local_model, cloud_model));
+                let chat_payload_fallback = serde_json::json!({
+                    "model": cloud_model,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "You are a helpful coding assistant. Use the provided context to answer the user's question accurately. If you don't know the answer based on the context, say so."
+                        },
+                        {
+                            "role": "user",
+                            "content": format!("Context:\n{}\n\nQuestion: {}", context_str, query)
+                        }
+                    ]
+                });
+                if let Ok(res) = client.post(&litellm_url)
+                    .header("Authorization", "Bearer sk-1234")
+                    .json(&chat_payload_fallback)
+                    .send()
+                    .await
+                {
+                    if res.status().is_success() {
+                        if let Ok(val) = res.json::<Value>().await {
+                            log_tui_debug(&format!("LiteLLM Raw Response (Fallback): {}", val));
+                            if let Some(content) = val.get("choices")
+                                .and_then(|c| c.as_array())
+                                .and_then(|a| a.first())
+                                .and_then(|f| f.get("message"))
+                                .and_then(|m| m.get("content"))
+                                .and_then(|s| s.as_str())
+                            {
+                                final_reply = Some(content.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+
+            let reply_content = final_reply.unwrap_or_else(|| "Error: Failed to generate response from LLM proxy.".to_string());
 
             log_tui_debug(&format!("LLM Reply: {}", reply_content));
             let _ = tx.send(reply_content).await;
@@ -773,8 +903,25 @@ mod tests {
                 }";
                 let _ = stream.write_all(grader_mock_response.as_bytes());
             }
-            
-            // 第三リクエスト: LiteLLM Proxy API (最終回答)
+            // 第三リクエスト: LiteLLM Classifier API (クエリ難易度判定: SIMPLE を返す)
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buffer = [0; 2048];
+                let _ = stream.read(&mut buffer);
+                
+                let classifier_mock_response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\
+                    \"choices\": [\
+                        {\
+                            \"message\": {\
+                                \"role\": \"assistant\",\
+                                \"content\": \"SIMPLE\"\
+                            }\
+                        }\
+                    ]\
+                }";
+                let _ = stream.write_all(classifier_mock_response.as_bytes());
+            }
+
+            // 第四リクエスト: LiteLLM Proxy API (最終回答)
             if let Ok((mut stream, _)) = listener.accept() {
                 let mut buffer = [0; 2048];
                 let _ = stream.read(&mut buffer);

@@ -13,6 +13,54 @@ from utils import get_current_project, reorder_records
 LITELLM_BASE = os.environ.get("LITELLM_BASE", "http://localhost:4000")
 LITELLM_KEY = os.environ.get("LITELLM_KEY", "sk-1234")
 
+def classify_query_difficulty(query: str) -> str:
+    url = f"{LITELLM_BASE}/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {LITELLM_KEY}",
+        "Content-Type": "application/json"
+    }
+    prompt = f"""Determine if the user's question requires advanced coding capability, complex logic analysis, or detailed system architectural design.
+Return exactly "ADVANCED" if it is complex, or "SIMPLE" if it is a simple greeting, generic question, basic coding term explanation, or trivial query.
+Do not output any other words.
+
+[Question]
+{query}
+
+Decision (ADVANCED/SIMPLE):"""
+
+    local_model = os.environ.get("RAGY_LOCAL_MODEL", "qwen2.5-coder")
+    cloud_model = os.environ.get("RAGY_LLM_MODEL", "gemini-2.5-flash")
+
+    payload = {
+        "model": local_model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.0
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        if response.status_code == 200:
+            decision = response.json()["choices"][0]["message"]["content"].strip().upper()
+            if "SIMPLE" in decision:
+                return "SIMPLE"
+            if "ADVANCED" in decision:
+                return "ADVANCED"
+    except Exception:
+        pass
+
+    # フォールバック
+    try:
+        payload["model"] = cloud_model
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        if response.status_code == 200:
+            decision = response.json()["choices"][0]["message"]["content"].strip().upper()
+            if "SIMPLE" in decision:
+                return "SIMPLE"
+    except Exception:
+        pass
+
+    return "ADVANCED"
+
+
 def generate_local_summary(query: str, context: str) -> str:
     url = f"{LITELLM_BASE}/v1/chat/completions"
     headers = {
@@ -29,8 +77,20 @@ def generate_local_summary(query: str, context: str) -> str:
 [質問]
 {query}
 """
+
+    difficulty = classify_query_difficulty(query)
+    local_model = os.environ.get("RAGY_LOCAL_MODEL", "qwen2.5-coder")
+    cloud_model = os.environ.get("RAGY_LLM_MODEL", "gemini-2.5-flash")
+
+    if difficulty == "SIMPLE":
+        target_model = local_model
+        print(f"  -> [Routing] Simple query. Using local model '{local_model}' for final answer.")
+    else:
+        target_model = cloud_model
+        print(f"  -> [Routing] Advanced query. Using cloud model '{cloud_model}' for final answer.")
+
     payload = {
-        "model": "qwen2.5-coder",
+        "model": target_model,
         "messages": [
             {
                 "role": "user",
@@ -46,6 +106,19 @@ def generate_local_summary(query: str, context: str) -> str:
             return data["choices"][0]["message"]["content"]
     except Exception:
         pass
+
+    # ローカルモデル呼び出しで失敗した場合、クラウドモデルへフォールバック
+    if target_model == local_model:
+        print(f"  -> [Fallback] Final answer generation failed on '{local_model}'. Trying cloud model '{cloud_model}'...")
+        payload["model"] = cloud_model
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=25)
+            if response.status_code == 200:
+                data = response.json()
+                return data["choices"][0]["message"]["content"]
+        except Exception:
+            pass
+
     return "Error generating local RAG summary."
 
 
