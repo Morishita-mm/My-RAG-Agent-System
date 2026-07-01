@@ -190,7 +190,7 @@ class DifySyncHandler(FileSystemEventHandler):
             }
         return None
 
-    def get_indexing_rule_payload(self, config):
+    def get_indexing_rule_payload(self, config, file_path=None):
         config_name = config.get("indexing_config_name", "default")
         indexing_rule = self.indexing_configs.get(config_name)
         if not indexing_rule:
@@ -208,6 +208,12 @@ class DifySyncHandler(FileSystemEventHandler):
         }
         if "doc_form" in indexing_rule:
             payload["doc_form"] = indexing_rule["doc_form"]
+            
+        # ドキュメント単位のメタデータを追加
+        if file_path:
+            project_name = self.get_project_name(file_path)
+            if project_name:
+                payload["doc_metadata"] = {"project": project_name}
         return payload
 
     def load_metadata(self):
@@ -299,7 +305,7 @@ class DifySyncHandler(FileSystemEventHandler):
         filename = os.path.basename(actual_upload_path)
         url = f"{api_base}/datasets/{dataset_id}/document/create_by_file"
         headers = {"Authorization": f"Bearer {api_key}"}
-        payload_data = self.get_indexing_rule_payload(config)
+        payload_data = self.get_indexing_rule_payload(config, file_path)
         data = {
             "data": json.dumps(payload_data)
         }
@@ -366,7 +372,7 @@ class DifySyncHandler(FileSystemEventHandler):
         filename = os.path.basename(actual_upload_path)
         url = f"{api_base}/datasets/{dataset_id}/documents/{doc_id}/update_by_file"
         headers = {"Authorization": f"Bearer {api_key}"}
-        payload_data = self.get_indexing_rule_payload(config)
+        payload_data = self.get_indexing_rule_payload(config, file_path)
         data = {
             "data": json.dumps(payload_data)
         }

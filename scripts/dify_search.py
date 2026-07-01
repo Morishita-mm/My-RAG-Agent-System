@@ -281,6 +281,21 @@ def get_project_config(project_id):
     return None
 
 
+def get_indexing_config(config_name):
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.dirname(script_dir)
+    indexing_config = os.path.join(repo_root, "docs/indexing_config.json")
+
+    if os.path.exists(indexing_config):
+        try:
+            with open(indexing_config, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data.get(config_name)
+        except Exception:
+            pass
+    return None
+
+
 def search_dify_knowledge(query):
     project_id = get_current_project()
     if not project_id:
@@ -300,6 +315,24 @@ def search_dify_knowledge(query):
         "DIFY_RAG_WORKFLOW_API_KEY"
     )
     dataset_id = config.get("dataset_id")
+
+    # メタデータフィルタの設定を解決
+    config_name = config.get("indexing_config_name", "default")
+    idx_cfg = get_indexing_config(config_name)
+    enable_metadata_filter = idx_cfg.get("enable_metadata_filter", False) if idx_cfg else False
+    
+    metadata_conditions = None
+    if enable_metadata_filter:
+        metadata_conditions = {
+            "logical_operator": "and",
+            "conditions": [
+                {
+                    "field": "project",
+                    "operator": "equal",
+                    "value": project_id
+                }
+            ]
+        }
 
     # 1. ワークフローAPIが利用可能な場合は優先実行 (Agentic RAG)
     if workflow_api_key:
@@ -390,6 +423,8 @@ def search_dify_knowledge(query):
                         "score_threshold": 0.4,
                     },
                 }
+                if metadata_conditions:
+                    payload["metadata_filtering_conditions"] = metadata_conditions
                 try:
                     res = requests.post(url, headers=headers, json=payload, timeout=15)
                     if res.status_code == 200:
@@ -432,6 +467,8 @@ def search_dify_knowledge(query):
                     "score_threshold": 0.4,
                 },
             }
+            if metadata_conditions:
+                payload["metadata_filtering_conditions"] = metadata_conditions
 
             try:
                 response = requests.post(url, headers=headers, json=payload, timeout=15)

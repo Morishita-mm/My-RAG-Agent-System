@@ -4,7 +4,8 @@
     "doc_form": "text_model",
     "process_rule": {
       "mode": "automatic"
-    }
+    },
+    "enable_metadata_filter": true
   },
   "parent_child_default": {
     "indexing_technique": "high_quality",
@@ -26,6 +27,7 @@
           "max_tokens": 200
         }
       }
-    }
+    },
+    "enable_metadata_filter": true
   }
 }
