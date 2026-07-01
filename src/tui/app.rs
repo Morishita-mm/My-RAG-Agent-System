@@ -34,6 +34,25 @@ pub enum ChatFocus {
 }
 
 pub(crate) fn get_project_root() -> PathBuf {
+    // 1. 環境変数 RAGY_PROJECT_ROOT が設定されていれば最優先で使用
+    if let Ok(root) = std::env::var("RAGY_PROJECT_ROOT") {
+        return PathBuf::from(root);
+    }
+
+    // 2. 実行ファイルの絶対パスから親を遡り、scripts/ragy_core.sh が存在するディレクトリを探索
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Ok(real_exe) = std::fs::canonicalize(exe_path) {
+            let mut parent = real_exe.parent();
+            while let Some(p) = parent {
+                if p.join("scripts/ragy_core.sh").exists() {
+                    return p.to_path_buf();
+                }
+                parent = p.parent();
+            }
+        }
+    }
+
+    // 3. フォールバックとして、カレントディレクトリを使用
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
