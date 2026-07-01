@@ -46,6 +46,9 @@ class DifySyncHandler(FileSystemEventHandler):
         self.meta_file = meta_file
         self.config_file = config_file or os.path.join(self.watch_dir, "sync_config.json")
         self.config_mtime = 0
+        self.indexing_config_file = os.path.join(self.watch_dir, "indexing_config.json")
+        self.indexing_config_mtime = 0
+        self.indexing_configs = self.load_indexing_configs()
         self.project_configs = self.load_project_configs()
         self.metadata = self.load_metadata()
         self.file_hashes = {}
@@ -121,6 +124,19 @@ class DifySyncHandler(FileSystemEventHandler):
                 return val.get("hash")
         return None
 
+    def load_indexing_configs(self):
+        if os.path.exists(self.indexing_config_file):
+            try:
+                mtime = os.path.getmtime(self.indexing_config_file)
+                self.indexing_config_mtime = mtime
+                with open(self.indexing_config_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    logging.info(f"Loaded indexing configs: {self.indexing_config_file}")
+                    return data
+            except Exception as e:
+                logging.error(f"Failed to load indexing configs from {self.indexing_config_file}: {e}")
+        return {}
+
     def load_project_configs(self):
         if os.path.exists(self.config_file):
             try:
@@ -144,6 +160,15 @@ class DifySyncHandler(FileSystemEventHandler):
             except Exception as e:
                 logging.error(f"Error checking config file modification: {e}")
 
+        # Check if indexing config file was modified and reload if necessary
+        if os.path.exists(self.indexing_config_file):
+            try:
+                mtime = os.path.getmtime(self.indexing_config_file)
+                if mtime != self.indexing_config_mtime:
+                    self.indexing_configs = self.load_indexing_configs()
+            except Exception as e:
+                logging.error(f"Error checking indexing config file modification: {e}")
+
         abs_path = os.path.abspath(file_path)
         try:
             rel_path = os.path.relpath(abs_path, self.watch_dir)
@@ -164,6 +189,26 @@ class DifySyncHandler(FileSystemEventHandler):
                 "dataset_id": self.dataset_id
             }
         return None
+
+    def get_indexing_rule_payload(self, config):
+        config_name = config.get("indexing_config_name", "default")
+        indexing_rule = self.indexing_configs.get(config_name)
+        if not indexing_rule:
+            indexing_rule = self.indexing_configs.get("default", {
+                "indexing_technique": "high_quality",
+                "doc_form": "text_model",
+                "process_rule": {
+                    "mode": "automatic"
+                }
+            })
+        
+        payload = {
+            "indexing_technique": indexing_rule.get("indexing_technique", "high_quality"),
+            "process_rule": indexing_rule.get("process_rule", {"mode": "automatic"})
+        }
+        if "doc_form" in indexing_rule:
+            payload["doc_form"] = indexing_rule["doc_form"]
+        return payload
 
     def load_metadata(self):
         if os.path.exists(self.meta_file):
@@ -253,13 +298,9 @@ class DifySyncHandler(FileSystemEventHandler):
         filename = os.path.basename(actual_upload_path)
         url = f"{api_base}/datasets/{dataset_id}/document/create_by_file"
         headers = {"Authorization": f"Bearer {api_key}"}
+        payload_data = self.get_indexing_rule_payload(config)
         data = {
-            "data": json.dumps({
-                "indexing_technique": "high_quality",
-                "process_rule": {
-                    "mode": "automatic"
-                }
-            })
+            "data": json.dumps(payload_data)
         }
         try:
             with open(actual_upload_path, 'rb') as f:
@@ -323,13 +364,9 @@ class DifySyncHandler(FileSystemEventHandler):
         filename = os.path.basename(actual_upload_path)
         url = f"{api_base}/datasets/{dataset_id}/documents/{doc_id}/update_by_file"
         headers = {"Authorization": f"Bearer {api_key}"}
+        payload_data = self.get_indexing_rule_payload(config)
         data = {
-            "data": json.dumps({
-                "indexing_technique": "high_quality",
-                "process_rule": {
-                    "mode": "automatic"
-                }
-            })
+            "data": json.dumps(payload_data)
         }
         try:
             with open(actual_upload_path, 'rb') as f:

@@ -1,0 +1,31 @@
+{
+  "default": {
+    "indexing_technique": "high_quality",
+    "doc_form": "text_model",
+    "process_rule": {
+      "mode": "automatic"
+    }
+  },
+  "parent_child_default": {
+    "indexing_technique": "high_quality",
+    "doc_form": "hierarchical_model",
+    "process_rule": {
+      "mode": "hierarchical",
+      "rules": {
+        "pre_processing_rules": [
+          {"id": "remove_extra_spaces", "enabled": true},
+          {"id": "remove_urls_emails", "enabled": true}
+        ],
+        "segmentation": {
+          "separator": "\n\n",
+          "max_tokens": 1000
+        },
+        "parent_mode": "paragraph",
+        "subchunk_segmentation": {
+          "separator": "\n",
+          "max_tokens": 200
+        }
+      }
+    }
+  }
+}

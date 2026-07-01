@@ -213,6 +213,59 @@ Only output the rewritten search query. Do not add any explanation, quotation ma
     return query
 
 
+def generate_multi_queries(query: str) -> list:
+    url = f"{LITELLM_BASE}/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {LITELLM_KEY}",
+        "Content-Type": "application/json"
+    }
+    system_prompt = """You are an AI assistant. Given a user's search query, generate 3 search queries in Japanese that are related but approach the search from different angles (using synonyms, alternative phrasing, or technical terms).
+Output exactly 3 lines, one query per line, with no labels, numbers, or extra text.
+Example output:
+クエリ1の書き換え
+クエリ2の書き換え
+クエリ3の書き換え"""
+    local_model = os.environ.get("RAGY_LOCAL_MODEL", "qwen2.5-coder")
+    cloud_model = os.environ.get("RAGY_LLM_MODEL", "gemini-2.5-flash")
+    
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": f"Original query: {query}"}
+    ]
+    payload = {
+        "model": local_model,
+        "messages": messages,
+        "temperature": 0.3
+    }
+    
+    queries = []
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=12)
+        if response.status_code == 200:
+            text = response.json()["choices"][0]["message"]["content"].strip()
+            queries = [q.strip() for q in text.split("\n") if q.strip()]
+    except Exception:
+        pass
+        
+    if not queries:
+        payload["model"] = cloud_model
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=15)
+            if response.status_code == 200:
+                text = response.json()["choices"][0]["message"]["content"].strip()
+                queries = [q.strip() for q in text.split("\n") if q.strip()]
+        except Exception:
+            pass
+            
+    if not queries:
+        queries = [query]
+    else:
+        if query not in queries:
+            queries.insert(0, query)
+        queries = queries[:3]
+    return queries
+
+
 def get_project_config(project_id):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     repo_root = os.path.dirname(script_dir)
@@ -315,42 +368,92 @@ def search_dify_knowledge(query):
     seen_contents = set()
     max_loops = 3
 
-    print(f"=== Knowledge search results for [Project: {project_id}] (Self-RAG/Local Synthesis) ===")
+    print(f"=== Knowledge search results for [Project: {project_id}] (Self-RAG/Local Synthesis with Multi-Query) ===")
+
+    from concurrent.futures import ThreadPoolExecutor
 
     for loop_idx in range(1, max_loops + 1):
-        print(f"\n[Loop {loop_idx}/3] Searching for: '{current_query}'...")
-        payload = {
-            "query": current_query,
-            "retrieval_model": {
-                "search_method": "hybrid_search",
-                "top_k": 5,
-                "reranking_enable": True,
-                "score_threshold_enabled": True,
-                "score_threshold": 0.4,
-            },
-        }
+        if loop_idx == 1:
+            queries = generate_multi_queries(query)
+            print(f"  -> Generated Multi-Queries for parallel search:")
+            for idx, q in enumerate(queries, 1):
+                print(f"     [{idx}] '{q}'")
+            
+            def retrieve_single(search_query):
+                payload = {
+                    "query": search_query,
+                    "retrieval_model": {
+                        "search_method": "hybrid_search",
+                        "top_k": 5,
+                        "reranking_enable": True,
+                        "score_threshold_enabled": True,
+                        "score_threshold": 0.4,
+                    },
+                }
+                try:
+                    res = requests.post(url, headers=headers, json=payload, timeout=15)
+                    if res.status_code == 200:
+                        return res.json().get("records", [])
+                except Exception as e:
+                    print(f"  -> Error retrieving for query '{search_query}': {e}")
+                return []
 
-        try:
-            response = requests.post(url, headers=headers, json=payload, timeout=15)
-            if response.status_code == 200:
-                records = response.json().get("records", [])
-                if not records:
-                    print(f"  -> No matching knowledge found in loop {loop_idx}.")
+            all_records = []
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                futures = {executor.submit(retrieve_single, q): q for q in queries}
+                for future in futures:
+                    q = futures[future]
+                    try:
+                        records = future.result()
+                        all_records.extend(records)
+                    except Exception as e:
+                        print(f"  -> Query '{q}' threw exception: {e}")
+            
+            all_records.sort(key=lambda x: x.get("score", 0.0), reverse=True)
+            reordered_records = reorder_records(all_records)
+            new_added = 0
+            for rec in reordered_records:
+                segment = rec.get("segment", {})
+                content = segment.get("content", "")
+                if content and content not in seen_contents:
+                    seen_contents.add(content)
+                    retrieved_segments.append(content)
+                    new_added += 1
+            print(f"  -> Multi-Query retrieval found {len(all_records)} total records (Added {new_added} unique segments).")
+        else:
+            print(f"\n[Loop {loop_idx}/3] Searching for: '{current_query}'...")
+            payload = {
+                "query": current_query,
+                "retrieval_model": {
+                    "search_method": "hybrid_search",
+                    "top_k": 5,
+                    "reranking_enable": True,
+                    "score_threshold_enabled": True,
+                    "score_threshold": 0.4,
+                },
+            }
+
+            try:
+                response = requests.post(url, headers=headers, json=payload, timeout=15)
+                if response.status_code == 200:
+                    records = response.json().get("records", [])
+                    if not records:
+                        print(f"  -> No matching knowledge found in loop {loop_idx}.")
+                    else:
+                        reordered_records = reorder_records(records)
+                        new_added = 0
+                        for rec in reordered_records:
+                            segment = rec.get("segment", {})
+                            content = segment.get("content", "")
+                            if content and content not in seen_contents:
+                                seen_contents.add(content)
+                                retrieved_segments.append(content)
+                                new_added += 1
+                        print(f"  -> Found {len(records)} records (Added {new_added} new unique segments).")
                 else:
-                    reordered_records = reorder_records(records)
-                    new_added = 0
-                    for rec in reordered_records:
-                        segment = rec.get("segment", {})
-                        content = segment.get("content", "")
-                        if content and content not in seen_contents:
-                            seen_contents.add(content)
-                            retrieved_segments.append(content)
-                            new_added += 1
-                    print(f"  -> Found {len(records)} records (Added {new_added} new unique segments).")
-            else:
-                print(f"  -> Error response: {response.status_code}")
-        except Exception as e:
-            print(f"  -> Connection error: {e}")
+                    print(f"  -> Error response: {response.status_code}")
+            except Exception as e:
+                print(f"  -> Connection error: {e}")
 
         raw_context = "\n\n".join(retrieved_segments)
 
