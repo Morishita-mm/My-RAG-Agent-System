@@ -1,6 +1,6 @@
 # Ragy: Enterprise-Ready Local-First Hybrid AI RAG & Agentic Platform
 
-[![Version](https://img.shields.io/badge/version-v2.2.3-blue.svg)](https://github.com/Morishita-mm/My-RAG-Agent-System/releases/tag/v2.2.3)
+[![Version](https://img.shields.io/badge/version-v2.11.0-blue.svg)](https://github.com/Morishita-mm/My-RAG-Agent-System/releases/tag/v2.11.0)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-lightgrey.svg)]()
 [![Rust](https://img.shields.io/badge/Language-Rust%20%7C%20Python-orange.svg)]()
@@ -73,10 +73,28 @@ graph TD
 
 * Rust（`ratatui` + `crossterm`）で実装された豪華なターミナルダッシュボードを搭載。
 * **NotebookLM風 RAG チャットパネル**: 選択されたアクティブプロジェクトと、Difyナレッジベース、ローカルLLM Proxyをシームレスに繋ぐチャット対話インターフェース。
+* **リアルタイム非同期進捗インジケータ**: 自己補正ループやルーティング判定フェーズの切り替えをリアルタイムで検知し、回転アニメーションスピナー（⠋ ⠙ ⠹ ⠸）とともに詳細ステータスを表示。
 * **リアルタイム統計・キャッシュ管理**: Redisキャッシュのヒット率、Exact/Semanticキャッシュの保持件数のモニタリングや、キー1つでのRedisキャッシュパージ。
 * **高精度な日本語スクロール表示**: 全角・半角混在テキストの折返しをリアルタイム計算し、1行単位で正確にVimキー（j/k）スクロール・自動スクロール追従が可能なバッファロジックを自作。
 
-### 2. 🧠 Context Optimization (Lost in the Middle 対策)
+### 2. 🧠 Self-Corrective RAG & Hybrid Routing (自己補正・高度ハイブリッドルーティング)
+
+* **自己補正型 RAG (Self-Corrective RAG) ループ**: Dify から取得したドキュメントが質問に対して十分であるかをローカルの LLM で判定し、不足している場合は検索クエリを自律的に書き換えて再検索を実行する補正ループを構築（最大3ループ）。
+* **ハイブリッド・ルーティング**:
+  * **クエリ難易度分類**: ユーザーの質問（クエリ）の難易度をローカルLLMで `SIMPLE`（挨拶や簡易的な技術用語解説）と `ADVANCED`（システム設計、複雑なロジック解析）に分類。
+  * **モデルプロキシ**: 判定結果が `SIMPLE` な場合はローカルモデル（`qwen2.5-coder`）、`ADVANCED` な場合はクラウドモデル（`gemini-2.5-flash`）に自動プロキシして、応答速度の向上とクラウド利用コストの削減を最大化。
+  * **自動フォールバック**: ローカルの Ollama が未起動・未ロード、またはエラーが起きた場合は、自動的かつ透過的にクラウドの Gemini API へ安全にフォールバックします。
+  * **日本語回答強制アサーション**: LLM (特にローカルの Qwen) が英語のコンテキストにつられて英語で出力するのを防ぐため、最終要約生成時のプロンプトで日本語を厳格強制。
+
+### 3. ⚡ Prompt Caching & Modular Architecture (プロンプトキャッシュ・クリーン設計)
+
+* **プロンプトキャッシュ最適化**: Gemini などのプレフィックスキャッシュのヒット率を 100% 発揮させるため、LLM リクエストのメッセージ配列を「System (静的ルール) ➔ Context (静的ドキュメント) ➔ Question (動的クエリ)」の物理オブジェクトに再設計・分割。
+* **モジュール分割設計 (リファクタリング)**: TUI 関連コードベースを多角的に監査し、スリム化。
+  * `src/tui/app.rs` を純粋な状態管理（約200行）に限定。
+  * Redis接続、Dify、および自己補正・ルーティング API 通信を `src/tui/api.rs` へ分離。
+  * モックサーバーを含むインテグレーションテストを `src/tui/app_tests.rs` に物理分割。
+
+### 4. 🧠 Context Optimization (Lost in the Middle 対策)
 
 * 長いコンテキストの「最初と最後」に最も注意を払い、「中盤」を軽視しやすいLLMの性質を克服するアルゴリズムを標準搭載。
 * Difyから取得したセグメント群をスコア順にソートし、高スコアのドキュメントを先頭と末尾に、低スコアのものを中間に配置（`[Rank 1, Rank 3, Rank 5, Rank 4, Rank 2]`）。
