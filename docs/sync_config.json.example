@@ -4,7 +4,8 @@
       "api_base": "http://localhost:8080/v1",
       "api_key": "YOUR_DIFY_DATASET_API_KEY_A",
       "dataset_id": "YOUR_DIFY_DATASET_ID_A",
-      "indexing_config_name": "parent_child_default"
+      "indexing_config_name": "parent_child_default",
+      "generate_summary": true
     },
     "project_b": {
       "api_base": "http://localhost:8080/v1",

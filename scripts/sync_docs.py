@@ -279,15 +279,16 @@ class DifySyncHandler(FileSystemEventHandler):
         dataset_id = config.get("dataset_id")
 
         ext = os.path.splitext(file_path)[1].lower()
+        generate_summary = config.get("generate_summary", False)
         actual_upload_path = file_path
         
-        if ext != '.md':
-            logging.info(f"Converting non-markdown file {file_path} to Markdown...")
+        if ext != '.md' or generate_summary:
+            logging.info(f"Processing document {file_path} (Convert/Normalize/Summary)...")
             from document_parser import convert_document_to_markdown
-            markdown_str = convert_document_to_markdown(file_path)
+            markdown_str = convert_document_to_markdown(file_path, generate_summary=generate_summary)
             
             if markdown_str.startswith("Error:"):
-                logging.error(f"Failed to convert document {file_path} to Markdown: {markdown_str}. Aborting upload.")
+                logging.error(f"Failed to process document {file_path}: {markdown_str}. Aborting upload.")
                 return
                 
             cache_path = self.get_parsed_cache_path(file_path)
@@ -345,15 +346,16 @@ class DifySyncHandler(FileSystemEventHandler):
         dataset_id = config.get("dataset_id")
 
         ext = os.path.splitext(file_path)[1].lower()
+        generate_summary = config.get("generate_summary", False)
         actual_upload_path = file_path
         
-        if ext != '.md':
-            logging.info(f"Re-converting modified non-markdown file {file_path} to Markdown...")
+        if ext != '.md' or generate_summary:
+            logging.info(f"Processing modified document {file_path} (Convert/Normalize/Summary)...")
             from document_parser import convert_document_to_markdown
-            markdown_str = convert_document_to_markdown(file_path)
+            markdown_str = convert_document_to_markdown(file_path, generate_summary=generate_summary)
             
             if markdown_str.startswith("Error:"):
-                logging.error(f"Failed to re-convert modified document {file_path} to Markdown: {markdown_str}. Aborting update.")
+                logging.error(f"Failed to process modified document {file_path}: {markdown_str}. Aborting update.")
                 return
                 
             cache_path = self.get_parsed_cache_path(file_path)
