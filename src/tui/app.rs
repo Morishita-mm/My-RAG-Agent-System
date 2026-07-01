@@ -350,6 +350,112 @@ impl App {
 
         tokio::spawn(async move {
             let client = reqwest::Client::new();
+
+            // 十分性判定 (Grader)
+            async fn grade_sufficiency(
+                client: &reqwest::Client,
+                litellm_url: &str,
+                model: &str,
+                query: &str,
+                context: &str,
+            ) -> String {
+                let prompt = format!(
+                    "You are a context relevance grader. Evaluate if the retrieved document context contains sufficient information to directly answer the user's question.\n\
+                    Return one of the following decisions as a single word:\n\
+                    - YES: The context is fully sufficient to answer the question directly.\n\
+                    - NO: The context is completely irrelevant or missing the key information.\n\
+                    - PARTIAL: The context has some relevant terms but is insufficient to provide a complete, high-quality answer.\n\n\
+                    [Context]\n\
+                    {}\n\n\
+                    [Question]\n\
+                    {}\n\n\
+                    Decision (YES/NO/PARTIAL):",
+                    context, query
+                );
+
+                let payload = serde_json::json!({
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.0
+                });
+
+                if let Ok(res) = client.post(litellm_url)
+                    .header("Authorization", "Bearer sk-1234")
+                    .json(&payload)
+                    .send()
+                    .await
+                {
+                    if res.status().is_success() {
+                        if let Ok(val) = res.json::<Value>().await {
+                            if let Some(content) = val.get("choices")
+                                .and_then(|c| c.as_array())
+                                .and_then(|a| a.first())
+                                .and_then(|f| f.get("message"))
+                                .and_then(|m| m.get("content"))
+                                .and_then(|s| s.as_str())
+                            {
+                                let decision = content.trim().to_uppercase();
+                                if decision.contains("YES") {
+                                    return "YES".to_string();
+                                } else if decision.contains("NO") {
+                                    return "NO".to_string();
+                                } else if decision.contains("PARTIAL") {
+                                    return "PARTIAL".to_string();
+                                }
+                            }
+                        }
+                    }
+                }
+                "PARTIAL".to_string()
+            }
+
+            // クエリ書き換え (Rewriter)
+            async fn rewrite_query(
+                client: &reqwest::Client,
+                litellm_url: &str,
+                model: &str,
+                query: &str,
+                context: &str,
+            ) -> String {
+                let prompt = format!(
+                    "You are a search query optimizer. Given the original question and the current insufficient search context, rewrite the query to improve the chance of finding the missing information in the vector database.\n\
+                    Only output the rewritten search query. Do not add any explanation, quotation marks, or preamble.\n\n\
+                    [Original Question]\n\
+                    {}\n\n\
+                    [Current Context]\n\
+                    {}\n\n\
+                    Optimized Search Query:",
+                    query, context
+                );
+
+                let payload = serde_json::json!({
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.3
+                });
+
+                if let Ok(res) = client.post(litellm_url)
+                    .header("Authorization", "Bearer sk-1234")
+                    .json(&payload)
+                    .send()
+                    .await
+                {
+                    if res.status().is_success() {
+                        if let Ok(val) = res.json::<Value>().await {
+                            if let Some(content) = val.get("choices")
+                                .and_then(|c| c.as_array())
+                                .and_then(|a| a.first())
+                                .and_then(|f| f.get("message"))
+                                .and_then(|m| m.get("content"))
+                                .and_then(|s| s.as_str())
+                            {
+                                return content.trim().trim_matches('"').trim_matches('\'').to_string();
+                            }
+                        }
+                    }
+                }
+                query.to_string()
+            }
             
             // 1. Dify Retrieval API でコンテキストを取得
             let rerank_enabled = std::env::var("RAGY_RERANK_ENABLE")
@@ -358,86 +464,122 @@ impl App {
 
             let retrieve_url = format!("{}/datasets/{}/retrieve", project.api_base, project.dataset_id);
             
+            let litellm_base = std::env::var("LITELLM_API_BASE")
+                .unwrap_or_else(|_| "http://localhost:4000/v1".to_string());
+            let litellm_url = format!("{}/chat/completions", litellm_base);
+            
+            let llm_model = std::env::var("RAGY_LLM_MODEL")
+                .unwrap_or_else(|_| "gemini-2.5-flash".to_string());
+
             log_tui_debug(&format!("=== NEW CHAT QUERY: '{}' (Project: {}) ===", query, project.name));
             log_tui_debug(&format!("Dify Retrieve URL: {}", retrieve_url));
-            
-            let retrieve_res = client.post(&retrieve_url)
-                .header("Authorization", format!("Bearer {}", project.api_key))
-                .json(&serde_json::json!({
-                    "query": query,
-                    "retrieval_model": {
-                        "search_method": "hybrid_search",
-                        "top_k": 3,
-                        "reranking_enable": rerank_enabled,
-                        "score_threshold_enabled": false
-                    }
-                }))
-                .send()
-                .await;
+            log_tui_debug(&format!("LiteLLM URL: {}", litellm_url));
 
-            let mut context_str = String::new();
-            match retrieve_res {
-                Ok(res) => {
-                    let status = res.status();
-                    log_tui_debug(&format!("Dify Retrieve HTTP Status: {}", status));
-                    if status.is_success() {
-                        if let Ok(val) = res.json::<Value>().await {
-                            log_tui_debug(&format!("Dify Retrieve Raw Response: {}", val));
-                            if let Some(records) = val.get("records").and_then(|r| r.as_array()) {
-                                log_tui_debug(&format!("Retrieved {} records from Dify.", records.len()));
-                                // Lost in the Middle 対策のコンテキスト再配置を適用
-                                let mut records_vec = records.clone();
-                                if records_vec.len() > 2 {
-                                    records_vec.sort_by(|a, b| {
-                                        let score_a = a.get("score").and_then(|s| s.as_f64()).unwrap_or(0.0);
-                                        let score_b = b.get("score").and_then(|s| s.as_f64()).unwrap_or(0.0);
-                                        score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
-                                    });
-                                    let mut reordered = vec![Value::Null; records_vec.len()];
-                                    let mut left = 0;
-                                    let mut right = records_vec.len() - 1;
-                                    for (idx, item) in records_vec.into_iter().enumerate() {
-                                        if idx % 2 == 0 {
-                                            reordered[left] = item;
-                                            left += 1;
-                                        } else {
-                                            reordered[right] = item;
-                                            right -= 1;
+            let mut current_query = query.clone();
+            let mut retrieved_segments: Vec<String> = Vec::new();
+            let mut seen_contents: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let max_loops = 3;
+
+            for loop_idx in 1..=max_loops {
+                log_tui_debug(&format!("[Loop {}/{}] Searching for: '{}'", loop_idx, max_loops, current_query));
+                
+                let retrieve_res = client.post(&retrieve_url)
+                    .header("Authorization", format!("Bearer {}", project.api_key))
+                    .json(&serde_json::json!({
+                        "query": current_query,
+                        "retrieval_model": {
+                            "search_method": "hybrid_search",
+                            "top_k": 3,
+                            "reranking_enable": rerank_enabled,
+                            "score_threshold_enabled": false
+                        }
+                    }))
+                    .send()
+                    .await;
+
+                match retrieve_res {
+                    Ok(res) => {
+                        let status = res.status();
+                        log_tui_debug(&format!("  -> Dify Retrieve HTTP Status: {}", status));
+                        if status.is_success() {
+                            if let Ok(val) = res.json::<Value>().await {
+                                log_tui_debug(&format!("  -> Dify Retrieve Raw Response: {}", val));
+                                if let Some(records) = val.get("records").and_then(|r| r.as_array()) {
+                                    log_tui_debug(&format!("  -> Retrieved {} records from Dify.", records.len()));
+                                    // Lost in the Middle 対策のコンテキスト再配置を適用
+                                    let mut records_vec = records.clone();
+                                    if records_vec.len() > 2 {
+                                        records_vec.sort_by(|a, b| {
+                                            let score_a = a.get("score").and_then(|s| s.as_f64()).unwrap_or(0.0);
+                                            let score_b = b.get("score").and_then(|s| s.as_f64()).unwrap_or(0.0);
+                                            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+                                        });
+                                        let mut reordered = vec![Value::Null; records_vec.len()];
+                                        let mut left = 0;
+                                        let mut right = records_vec.len() - 1;
+                                        for (idx, item) in records_vec.into_iter().enumerate() {
+                                            if idx % 2 == 0 {
+                                                reordered[left] = item;
+                                                left += 1;
+                                            } else {
+                                                reordered[right] = item;
+                                                right -= 1;
+                                            }
+                                        }
+                                        records_vec = reordered;
+                                    }
+
+                                    for rec in records_vec {
+                                        let content_opt = rec.get("segment")
+                                            .and_then(|s| s.get("content"))
+                                            .or_else(|| rec.get("content"))
+                                            .and_then(|c| c.as_str());
+                                        if let Some(content) = content_opt {
+                                            let content_str = content.to_string();
+                                            if !seen_contents.contains(&content_str) {
+                                                seen_contents.insert(content_str.clone());
+                                                retrieved_segments.push(content_str);
+                                            }
                                         }
                                     }
-                                    records_vec = reordered;
                                 }
-
-                                for rec in records_vec {
-                                    let content_opt = rec.get("segment")
-                                        .and_then(|s| s.get("content"))
-                                        .or_else(|| rec.get("content"))
-                                        .and_then(|c| c.as_str());
-                                    if let Some(content) = content_opt {
-                                        context_str.push_str(content);
-                                        context_str.push_str("\n\n");
-                                    }
-                                }
+                            } else {
+                                log_tui_debug("  -> Error: Failed to parse Dify Retrieval response JSON.");
+                                let _ = tx.send("Error: Failed to parse Dify Retrieval response JSON.".to_string()).await;
+                                return;
                             }
                         } else {
-                            log_tui_debug("Error: Failed to parse Dify Retrieval response JSON.");
-                            let _ = tx.send("Error: Failed to parse Dify Retrieval response JSON.".to_string()).await;
+                            let err_text = res.text().await.unwrap_or_default();
+                            log_tui_debug(&format!("  -> Dify Retrieval HTTP Error {}: {}", status, err_text));
+                            let _ = tx.send(format!("Dify Retrieval HTTP Error {}: {}", status, err_text)).await;
                             return;
                         }
-                    } else {
-                        let err_text = res.text().await.unwrap_or_default();
-                        log_tui_debug(&format!("Dify Retrieval HTTP Error {}: {}", status, err_text));
-                        let _ = tx.send(format!("Dify Retrieval HTTP Error {}: {}", status, err_text)).await;
+                    }
+                    Err(e) => {
+                        log_tui_debug(&format!("  -> Dify Retrieval Connect Error: {}", e));
+                        let _ = tx.send(format!("Dify Retrieval Connect Error: {}", e)).await;
                         return;
                     }
                 }
-                Err(e) => {
-                    log_tui_debug(&format!("Dify Retrieval Connect Error: {}", e));
-                    let _ = tx.send(format!("Dify Retrieval Connect Error: {}", e)).await;
-                    return;
+
+                let raw_context = retrieved_segments.join("\n\n");
+                let decision = if raw_context.is_empty() {
+                    "NO".to_string()
+                } else {
+                    let d = grade_sufficiency(&client, &litellm_url, &llm_model, &query, &raw_context).await;
+                    log_tui_debug(&format!("  -> Sufficiency Grade: {}", d));
+                    d
+                };
+
+                if decision == "YES" || loop_idx == max_loops {
+                    break;
                 }
+
+                current_query = rewrite_query(&client, &litellm_url, &llm_model, &query, &raw_context).await;
+                log_tui_debug(&format!("  -> Rewritten Query: '{}'", current_query));
             }
 
+            let mut context_str = retrieved_segments.join("\n\n");
             if context_str.is_empty() {
                 log_tui_debug("Warning: Extracted context is empty!");
                 context_str = "No relevant context found in dataset.".to_string();
@@ -548,7 +690,25 @@ mod tests {
                 let _ = stream.write_all(dify_mock_response.as_bytes());
             }
             
-            // 第二リクエスト: LiteLLM Proxy API
+            // 第二リクエスト: LiteLLM Grader API (YES を返す)
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buffer = [0; 2048];
+                let _ = stream.read(&mut buffer);
+                
+                let grader_mock_response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\
+                    \"choices\": [\
+                        {\
+                            \"message\": {\
+                                \"role\": \"assistant\",\
+                                \"content\": \"YES\"\
+                            }\
+                        }\
+                    ]\
+                }";
+                let _ = stream.write_all(grader_mock_response.as_bytes());
+            }
+            
+            // 第三リクエスト: LiteLLM Proxy API (最終回答)
             if let Ok((mut stream, _)) = listener.accept() {
                 let mut buffer = [0; 2048];
                 let _ = stream.read(&mut buffer);
@@ -644,9 +804,9 @@ mod tests {
         // 実際の RAG チャット呼び出しをトリガー
         app.send_rag_chat("What is My-RAG-Agent-System?".to_string(), chat_tx).await;
         
-        // リアルな LLM からの応答を最大 15 秒間待機
+        // リアルな LLM からの応答を最大 40 秒間待機
         let mut received_reply = None;
-        for _ in 0..150 {
+        for _ in 0..400 {
             if let Ok(reply) = chat_rx.try_recv() {
                 received_reply = Some(reply);
                 break;

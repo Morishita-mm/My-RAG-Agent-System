@@ -49,9 +49,79 @@ def generate_local_summary(query: str, context: str) -> str:
     return "Error generating local RAG summary."
 
 
+def grade_context_sufficiency(query: str, context: str) -> str:
+    url = f"{LITELLM_BASE}/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {LITELLM_KEY}",
+        "Content-Type": "application/json"
+    }
+    prompt = f"""You are a context relevance grader. Evaluate if the retrieved document context contains sufficient information to directly answer the user's question.
+Return one of the following decisions as a single word:
+- YES: The context is fully sufficient to answer the question directly.
+- NO: The context is completely irrelevant or missing the key information.
+- PARTIAL: The context has some relevant terms but is insufficient to provide a complete, high-quality answer.
+
+[Context]
+{context}
+
+[Question]
+{query}
+
+Decision (YES/NO/PARTIAL):"""
+
+    payload = {
+        "model": "qwen2.5-coder",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.0
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=15)
+        if response.status_code == 200:
+            decision = response.json()["choices"][0]["message"]["content"].strip().upper()
+            if "YES" in decision:
+                return "YES"
+            elif "NO" in decision:
+                return "NO"
+            elif "PARTIAL" in decision:
+                return "PARTIAL"
+    except Exception:
+        pass
+    return "PARTIAL"
+
+
+def rewrite_search_query(query: str, context: str) -> str:
+    url = f"{LITELLM_BASE}/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {LITELLM_KEY}",
+        "Content-Type": "application/json"
+    }
+    prompt = f"""You are a search query optimizer. Given the original question and the current insufficient search context, rewrite the query to improve the chance of finding the missing information in the vector database.
+Only output the rewritten search query. Do not add any explanation, quotation marks, or preamble.
+
+[Original Question]
+{query}
+
+[Current Context]
+{context}
+
+Optimized Search Query:"""
+
+    payload = {
+        "model": "qwen2.5-coder",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.3
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=15)
+        if response.status_code == 200:
+            return response.json()["choices"][0]["message"]["content"].strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return query
+
+
 def get_project_config(project_id):
     script_dir = os.path.dirname(os.path.abspath(__file__))
-
     repo_root = os.path.dirname(script_dir)
     sync_config = os.path.join(repo_root, "docs/sync_config.json")
 
@@ -136,7 +206,7 @@ def search_dify_knowledge(query):
                 f"Warning: Exception during Dify Workflow search ({e}). Falling back to retrieve API..."
             )
 
-    # 2. 従来のデータセットAPIへのフォールバック
+    # 2. 従来のデータセットAPIへのフォールバック（Self-RAGループ処理）
     if not dataset_api_key or not dataset_id:
         print(f"Error: Missing api_key or dataset_id for project '{project_id}'")
         sys.exit(1)
@@ -146,43 +216,67 @@ def search_dify_knowledge(query):
         "Authorization": f"Bearer {dataset_api_key}",
         "Content-Type": "application/json",
     }
-    payload = {
-        "query": query,
-        "retrieval_model": {
-            "search_method": "hybrid_search",
-            "top_k": 5,
-            "reranking_enable": True,
-            "score_threshold_enabled": True,
-            "score_threshold": 0.5,
-        },
-    }
 
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=10)
-        if response.status_code == 200:
-            records = response.json().get("records", [])
-            if not records:
-                print("No matching knowledge found.")
-                return
+    current_query = query
+    retrieved_segments = []
+    seen_contents = set()
+    max_loops = 3
 
-            print(f"=== Knowledge search results for [Project: {project_id}] (Local Synthesis) ===")
-            reordered_records = reorder_records(records)
-            results = []
-            for rec in reordered_records:
-                segment = rec.get("segment", {})
-                content = segment.get("content", "")
-                if content:
-                    results.append(content)
-            raw_context = "\n\n".join(results)
-            
-            summary = generate_local_summary(query, raw_context)
-            print(summary)
+    print(f"=== Knowledge search results for [Project: {project_id}] (Self-RAG/Local Synthesis) ===")
+
+    for loop_idx in range(1, max_loops + 1):
+        print(f"\n[Loop {loop_idx}/3] Searching for: '{current_query}'...")
+        payload = {
+            "query": current_query,
+            "retrieval_model": {
+                "search_method": "hybrid_search",
+                "top_k": 5,
+                "reranking_enable": True,
+                "score_threshold_enabled": True,
+                "score_threshold": 0.4,
+            },
+        }
+
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=15)
+            if response.status_code == 200:
+                records = response.json().get("records", [])
+                if not records:
+                    print(f"  -> No matching knowledge found in loop {loop_idx}.")
+                else:
+                    reordered_records = reorder_records(records)
+                    new_added = 0
+                    for rec in reordered_records:
+                        segment = rec.get("segment", {})
+                        content = segment.get("content", "")
+                        if content and content not in seen_contents:
+                            seen_contents.add(content)
+                            retrieved_segments.append(content)
+                            new_added += 1
+                    print(f"  -> Found {len(records)} records (Added {new_added} new unique segments).")
+            else:
+                print(f"  -> Error response: {response.status_code}")
+        except Exception as e:
+            print(f"  -> Connection error: {e}")
+
+        raw_context = "\n\n".join(retrieved_segments)
+
+        if not raw_context:
+            decision = "NO"
         else:
-            print(
-                f"Error: Dify API returned status code {response.status_code} - {response.text}"
-            )
-    except Exception as e:
-        print(f"Error during search: {e}")
+            decision = grade_context_sufficiency(query, raw_context)
+            print(f"  -> Sufficiency Grade: {decision}")
+
+        if decision == "YES" or loop_idx == max_loops:
+            break
+
+        current_query = rewrite_search_query(query, raw_context)
+        print(f"  -> Rewritten Query: '{current_query}'")
+
+    final_context = "\n\n".join(retrieved_segments) if retrieved_segments else "No relevant context found in dataset."
+    summary = generate_local_summary(query, final_context)
+    print("\n=== Final Answer ===")
+    print(summary)
 
 
 if __name__ == "__main__":
