@@ -358,29 +358,28 @@ impl App {
                 query: &str,
                 context: &str,
             ) -> String {
-                let prompt = format!(
-                    "You are a context relevance grader. Evaluate if the retrieved document context contains sufficient information to directly answer the user's question.\n\
+                let system_prompt = "You are a context relevance grader. Evaluate if the retrieved document context contains sufficient information to directly answer the user's question.\n\
                     Return one of the following decisions as a single word:\n\
                     - YES: The context is fully sufficient to answer the question directly.\n\
                     - NO: The context is completely irrelevant or missing the key information.\n\
-                    - PARTIAL: The context has some relevant terms but is insufficient to provide a complete, high-quality answer.\n\n\
-                    [Context]\n\
-                    {}\n\n\
-                    [Question]\n\
-                    {}\n\n\
-                    Decision (YES/NO/PARTIAL):",
-                    context, query
-                );
+                    - PARTIAL: The context has some relevant terms but is insufficient to provide a complete, high-quality answer.\n\
+                    Decision (YES/NO/PARTIAL):";
 
                 let local_model = std::env::var("RAGY_LOCAL_MODEL")
                     .unwrap_or_else(|_| "qwen2.5-coder".to_string());
                 let cloud_model = std::env::var("RAGY_LLM_MODEL")
                     .unwrap_or_else(|_| "gemini-2.5-flash".to_string());
 
+                let messages = serde_json::json!([
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": format!("Context:\n{}", context)},
+                    {"role": "user", "content": format!("Question:\n{}", query)}
+                ]);
+
                 // 1. ローカルモデルでの試行
                 let payload = serde_json::json!({
                     "model": local_model,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": messages,
                     "temperature": 0.0
                 });
 
@@ -412,7 +411,7 @@ impl App {
                 log_tui_debug(&format!("  -> [Fallback] Local model '{}' failed for grading. Trying cloud model '{}'...", local_model, cloud_model));
                 let payload_fallback = serde_json::json!({
                     "model": cloud_model,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": messages,
                     "temperature": 0.0
                 });
 
@@ -450,26 +449,24 @@ impl App {
                 query: &str,
                 context: &str,
             ) -> String {
-                let prompt = format!(
-                    "You are a search query optimizer. Given the original question and the current insufficient search context, rewrite the query to improve the chance of finding the missing information in the vector database.\n\
-                    Only output the rewritten search query. Do not add any explanation, quotation marks, or preamble.\n\n\
-                    [Original Question]\n\
-                    {}\n\n\
-                    [Current Context]\n\
-                    {}\n\n\
-                    Optimized Search Query:",
-                    query, context
-                );
+                let system_prompt = "You are a search query optimizer. Given the original question and the current insufficient search context, rewrite the query to improve the chance of finding the missing information in the vector database.\n\
+                    Only output the rewritten search query. Do not add any explanation, quotation marks, or preamble.";
 
                 let local_model = std::env::var("RAGY_LOCAL_MODEL")
                     .unwrap_or_else(|_| "qwen2.5-coder".to_string());
                 let cloud_model = std::env::var("RAGY_LLM_MODEL")
                     .unwrap_or_else(|_| "gemini-2.5-flash".to_string());
 
+                let messages = serde_json::json!([
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": format!("Current Context:\n{}", context)},
+                    {"role": "user", "content": format!("Original Question:\n{}", query)}
+                ]);
+
                 // 1. ローカルモデルでの試行
                 let payload = serde_json::json!({
                     "model": local_model,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": messages,
                     "temperature": 0.3
                 });
 
@@ -498,7 +495,7 @@ impl App {
                 log_tui_debug(&format!("  -> [Fallback] Local model '{}' failed for rewriting. Trying cloud model '{}'...", local_model, cloud_model));
                 let payload_fallback = serde_json::json!({
                     "model": cloud_model,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": messages,
                     "temperature": 0.3
                 });
 
@@ -532,25 +529,25 @@ impl App {
                 litellm_url: &str,
                 query: &str,
             ) -> String {
-                let prompt = format!(
-                    "Determine if the user's question requires advanced coding capability, complex logic analysis, or detailed system architectural design.\n\
+                let system_prompt = "Determine if the user's question requires advanced coding capability, complex logic analysis, or detailed system architectural design.\n\
                     Return exactly \"ADVANCED\" if it is complex, or \"SIMPLE\" if it is a simple greeting, generic question, basic coding term explanation, or trivial query.\n\
-                    Do not output any other words.\n\n\
-                    [Question]\n\
-                    {}\n\n\
-                    Decision (ADVANCED/SIMPLE):",
-                    query
-                );
+                    Do not output any other words.\n\
+                    Decision (ADVANCED/SIMPLE):";
 
                 let local_model = std::env::var("RAGY_LOCAL_MODEL")
                     .unwrap_or_else(|_| "qwen2.5-coder".to_string());
                 let cloud_model = std::env::var("RAGY_LLM_MODEL")
                     .unwrap_or_else(|_| "gemini-2.5-flash".to_string());
 
+                let messages = serde_json::json!([
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": format!("Question:\n{}", query)}
+                ]);
+
                 // 1. ローカルモデルでの試行
                 let payload = serde_json::json!({
                     "model": local_model,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": messages,
                     "temperature": 0.0
                 });
 
@@ -581,7 +578,7 @@ impl App {
                 log_tui_debug(&format!("  -> [Fallback] Local model '{}' failed for difficulty classification. Trying cloud model '{}'...", local_model, cloud_model));
                 let payload_fallback = serde_json::json!({
                     "model": cloud_model,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": messages,
                     "temperature": 0.0
                 });
 
@@ -766,7 +763,11 @@ impl App {
                     },
                     {
                         "role": "user",
-                        "content": format!("Context:\n{}\n\nQuestion: {}", context_str, query)
+                        "content": format!("Context:\n{}", context_str)
+                    },
+                    {
+                        "role": "user",
+                        "content": format!("Question:\n{}", query)
                     }
                 ]
             });
@@ -817,7 +818,11 @@ impl App {
                         },
                         {
                             "role": "user",
-                            "content": format!("Context:\n{}\n\nQuestion: {}", context_str, query)
+                            "content": format!("Context:\n{}", context_str)
+                        },
+                        {
+                            "role": "user",
+                            "content": format!("Question:\n{}", query)
                         }
                     ]
                 });

@@ -19,21 +19,22 @@ def classify_query_difficulty(query: str) -> str:
         "Authorization": f"Bearer {LITELLM_KEY}",
         "Content-Type": "application/json"
     }
-    prompt = f"""Determine if the user's question requires advanced coding capability, complex logic analysis, or detailed system architectural design.
+    system_prompt = """Determine if the user's question requires advanced coding capability, complex logic analysis, or detailed system architectural design.
 Return exactly "ADVANCED" if it is complex, or "SIMPLE" if it is a simple greeting, generic question, basic coding term explanation, or trivial query.
 Do not output any other words.
-
-[Question]
-{query}
-
 Decision (ADVANCED/SIMPLE):"""
 
     local_model = os.environ.get("RAGY_LOCAL_MODEL", "qwen2.5-coder")
     cloud_model = os.environ.get("RAGY_LLM_MODEL", "gemini-2.5-flash")
 
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": f"Question:\n{query}"}
+    ]
+
     payload = {
         "model": local_model,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": messages,
         "temperature": 0.0
     }
     try:
@@ -67,16 +68,7 @@ def generate_local_summary(query: str, context: str) -> str:
         "Authorization": f"Bearer {LITELLM_KEY}",
         "Content-Type": "application/json"
     }
-    prompt = f"""以下に提供するドキュメント情報（コンテキスト）のみに基づいて、質問に日本語で正確に回答してください。
-ドキュメントに記述されていない情報については、絶対に推測や自分の知識を使わずに「情報がありません」とだけ答えてください。
-ハルシネーションを厳格に防止してください。
-
-[コンテキスト]
-{context}
-
-[質問]
-{query}
-"""
+    system_prompt = "以下に提供するドキュメント情報（コンテキスト）のみに基づいて、質問に日本語で正確に回答してください。\nドキュメントに記述されていない情報については、絶対に推測や自分の知識を使わずに「情報がありません」とだけ答えてください。\nハルシネーションを厳格に防止してください。"
 
     difficulty = classify_query_difficulty(query)
     local_model = os.environ.get("RAGY_LOCAL_MODEL", "qwen2.5-coder")
@@ -89,14 +81,15 @@ def generate_local_summary(query: str, context: str) -> str:
         target_model = cloud_model
         print(f"  -> [Routing] Advanced query. Using cloud model '{cloud_model}' for final answer.")
 
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": f"Context:\n{context}"},
+        {"role": "user", "content": f"Question:\n{query}"}
+    ]
+
     payload = {
         "model": target_model,
-        "messages": [
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
+        "messages": messages,
         "temperature": 0.0
     }
     try:
@@ -128,27 +121,26 @@ def grade_context_sufficiency(query: str, context: str) -> str:
         "Authorization": f"Bearer {LITELLM_KEY}",
         "Content-Type": "application/json"
     }
-    prompt = f"""You are a context relevance grader. Evaluate if the retrieved document context contains sufficient information to directly answer the user's question.
+    system_prompt = """You are a context relevance grader. Evaluate if the retrieved document context contains sufficient information to directly answer the user's question.
 Return one of the following decisions as a single word:
 - YES: The context is fully sufficient to answer the question directly.
 - NO: The context is completely irrelevant or missing the key information.
 - PARTIAL: The context has some relevant terms but is insufficient to provide a complete, high-quality answer.
-
-[Context]
-{context}
-
-[Question]
-{query}
-
 Decision (YES/NO/PARTIAL):"""
 
     local_model = os.environ.get("RAGY_LOCAL_MODEL", "qwen2.5-coder")
     cloud_model = os.environ.get("RAGY_LLM_MODEL", "gemini-2.5-flash")
 
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": f"Context:\n{context}"},
+        {"role": "user", "content": f"Question:\n{query}"}
+    ]
+
     # 1. ローカルモデルでの試行
     payload = {
         "model": local_model,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": messages,
         "temperature": 0.0
     }
     try:
@@ -183,24 +175,22 @@ def rewrite_search_query(query: str, context: str) -> str:
         "Authorization": f"Bearer {LITELLM_KEY}",
         "Content-Type": "application/json"
     }
-    prompt = f"""You are a search query optimizer. Given the original question and the current insufficient search context, rewrite the query to improve the chance of finding the missing information in the vector database.
-Only output the rewritten search query. Do not add any explanation, quotation marks, or preamble.
-
-[Original Question]
-{query}
-
-[Current Context]
-{context}
-
-Optimized Search Query:"""
+    system_prompt = """You are a search query optimizer. Given the original question and the current insufficient search context, rewrite the query to improve the chance of finding the missing information in the vector database.
+Only output the rewritten search query. Do not add any explanation, quotation marks, or preamble."""
 
     local_model = os.environ.get("RAGY_LOCAL_MODEL", "qwen2.5-coder")
     cloud_model = os.environ.get("RAGY_LLM_MODEL", "gemini-2.5-flash")
 
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": f"Current Context:\n{context}"},
+        {"role": "user", "content": f"Original Question:\n{query}"}
+    ]
+
     # 1. ローカルモデルでの試行
     payload = {
         "model": local_model,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": messages,
         "temperature": 0.3
     }
     try:
