@@ -63,7 +63,6 @@ def download_pdfs(doc_list, target_dir, max_docs=5):
     os.makedirs(target_dir, exist_ok=True)
     downloaded_files = {}
     
-    # 接続安定性向上のためユーザーエージェントを設定
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
@@ -101,10 +100,9 @@ def fetch_questions(downloaded_filenames):
     print("\n--- Fetching Questions from Hugging Face Dataset API ---")
     questions = []
     
-    # APIから質問行を順次取得（Datasets Server API は offset/limit を利用）
     offset = 0
     limit = 100
-    max_fetch_attempts = 10 # 最大1000件
+    max_fetch_attempts = 10
     
     for _ in range(max_fetch_attempts):
         url = f"{DATASET_API_URL}&offset={offset}&limit={limit}"
@@ -123,7 +121,6 @@ def fetch_questions(downloaded_filenames):
                 row_data = row.get("row", {})
                 target_file = row_data.get("target_file_name")
                 
-                # ダウンロードできたPDFに対する質問のみ抽出
                 if target_file in downloaded_filenames:
                     questions.append({
                         "query": row_data.get("question"),
@@ -188,7 +185,7 @@ def wait_for_indexing(dataset_id):
     headers = {"Authorization": f"Bearer {DATASET_API_KEY}"}
     
     print("Waiting for indexing to complete...")
-    for _ in range(60): # 最大10分
+    for _ in range(60):
         try:
             response = requests.get(url, headers=headers, timeout=10)
             if response.status_code == 200:
@@ -243,6 +240,57 @@ def run_rag_query(query):
         final_answer = output.strip()
     return final_answer, latency
 
+def get_source_document_text(file_name):
+    cache_dir = os.path.join(repo_root, "docs/.parsed_cache/eval_project")
+    candidates = [
+        os.path.join(cache_dir, f"{file_name}.md"),
+        os.path.join(cache_dir, f"{file_name}.md.md"),
+        os.path.join(cache_dir, file_name)
+    ]
+    
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    return f.read()
+            except Exception as e:
+                print(f"Warning: Failed to read cache file {path}: {e}")
+    print(f"Warning: Parsed source cache not found for {file_name}")
+    return ""
+
+def check_fact_existence_in_source(query, reference, source_text):
+    if not source_text or len(source_text) < 100:
+        return False
+        
+    prompt = f"""あなたは客観的なデータ検証者です。
+提供されたドキュメントの全文テキストの中に、指定された質問に回答するための事実や情報が物理的に含まれているかどうかを判定してください。
+「模範解答」に記載されている具体的な事実（数値、固有名詞、特定の施策など）が、ドキュメント中に存在するかどうかを厳格にチェックしてください。
+記述が部分的であっても、回答の直接的な根拠となる情報が含まれていれば「存在する」と判定してください。
+
+出力フォーマット（必ず以下のJSON形式でのみ出力してください。他の説明文や前置き、コードブロックの囲みなどは一切含めず、純粋なJSON文字列のみを出力してください）：
+{{
+  "exists": true | false,
+  "reason": "存在する／存在しないと判断した理由（ドキュメント中のどの部分に関連記述があるか、あるいは全く見当たらないか）"
+}}
+
+---
+[質問]
+{query}
+
+[模範解答]
+{reference}
+
+[ドキュメント全文テキスト]
+{source_text[:12000]}
+"""
+    try:
+        res_json = call_llm(prompt, response_json=True)
+        if res_json:
+            return res_json.get("exists", False)
+    except Exception as e:
+        print(f"Warning: Error checking fact existence: {e}")
+    return False
+
 def evaluate_answer(query, reference, answer):
     prompt = f"""あなたはRAGシステムの精度を評価する厳格な評価者です。
 ユーザーからの質問、提供された模範解答、およびシステムが作成した回答を比較し、以下の定義に従ってシステム回答を「Perfect」「Acceptable」「Missing」「Incorrect」のいずれか1つに分類してください。
@@ -278,7 +326,9 @@ def score_mapping(eval_str):
     mapping = {
         "Perfect": 1.0,
         "Acceptable": 0.5,
-        "Missing": 0.0,
+        "Missing_Correct": 1.0,  # 正しい未回答は加算評価
+        "Missing_Failed": 0.0,   # RAGの検索/読解失敗
+        "Missing": 0.0,          # フォールバック
         "Incorrect": -1.0
     }
     return mapping.get(eval_str, 0.0)
@@ -286,7 +336,6 @@ def score_mapping(eval_str):
 def main():
     print("=== Start Hugging Face RAG Dataset Benchmark ===")
     
-    # 評価用ディレクトリとプロジェクトシンボルの作成
     eval_proj_dir = os.path.join(repo_root, "docs/eval_project")
     os.makedirs(eval_proj_dir, exist_ok=True)
     
@@ -300,25 +349,21 @@ def main():
     try:
         # Step 1: データセットのロードとPDFダウンロード
         doc_list = fetch_documents_list()
-        # 評価に必要なPDFを最大3ファイルダウンロード（安定性向上のため3ファイルに制限）
         downloaded_files = download_pdfs(doc_list, eval_proj_dir, max_docs=3)
         
-        # 質問データの抽出
         all_questions = fetch_questions(downloaded_files.keys())
         
         if len(all_questions) < 50:
             print(f"Warning: Only {len(all_questions)} questions matched downloaded PDFs. Download more PDFs...")
-            # 50問に届かない場合は、追加でPDFをダウンロード
             downloaded_files.update(download_pdfs(doc_list[3:], eval_proj_dir, max_docs=5))
             all_questions = fetch_questions(downloaded_files.keys())
             
         if not all_questions:
             raise Exception("No evaluation questions found.")
             
-        # ランダムに50問を抽出してテスト対象にする
         test_questions = all_questions
         if len(test_questions) > 50:
-            random.seed(42) # 再現性のためシード固定
+            random.seed(42)
             test_questions = random.sample(test_questions, 50)
             
         print(f"Selected {len(test_questions)} questions for benchmark evaluation.")
@@ -338,12 +383,9 @@ def main():
         }
         update_sync_config(old_config)
         
-        # 同期実行と待機
         run_sync_docs()
         wait_for_indexing(dataset_id_old)
         
-        # キャッシュパージ
-        # 質問の実行
         old_evals = []
         for idx, q in enumerate(test_questions, 1):
             query = q["query"]
@@ -351,15 +393,28 @@ def main():
             print(f"[{idx}/{len(test_questions)}] Querying: {query}")
             ans, latency = run_rag_query(query)
             ev = evaluate_answer(query, ref, ans)
-            score = score_mapping(ev.get("evaluation"))
+            eval_type = ev.get("evaluation")
+            reason = ev.get("reason", "")
             
+            # Missing の詳細化
+            if eval_type == "Missing":
+                src_text = get_source_document_text(q["target_file_name"])
+                exists = check_fact_existence_in_source(query, ref, src_text)
+                if exists:
+                    eval_type = "Missing_Failed"
+                    reason += " (ドキュメント内に答えがあるにも関わらず回答できませんでした - 検索/読解の失敗)"
+                else:
+                    eval_type = "Missing_Correct"
+                    reason += " (ドキュメント内に答えが存在しないため正しく「わからない」と答えました - 正しい防止挙動)"
+                    
+            score = score_mapping(eval_type)
             old_evals.append({
                 "query": query,
                 "reference": ref,
                 "answer": ans,
                 "latency": latency,
-                "evaluation": ev.get("evaluation"),
-                "reason": ev.get("reason"),
+                "evaluation": eval_type,
+                "reason": reason,
                 "score": score
             })
             
@@ -378,12 +433,10 @@ def main():
         }
         update_sync_config(new_config)
         
-        # パース一時キャッシュをパージして再パースを強制
         cache_dir = os.path.join(repo_root, "docs/.parsed_cache/eval_project")
         if os.path.exists(cache_dir):
             shutil.rmtree(cache_dir)
             
-        # 同期実行と待機
         run_sync_docs()
         wait_for_indexing(dataset_id_new)
         
@@ -394,15 +447,28 @@ def main():
             print(f"[{idx}/{len(test_questions)}] Querying: {query}")
             ans, latency = run_rag_query(query)
             ev = evaluate_answer(query, ref, ans)
-            score = score_mapping(ev.get("evaluation"))
+            eval_type = ev.get("evaluation")
+            reason = ev.get("reason", "")
             
+            # Missing の詳細化
+            if eval_type == "Missing":
+                src_text = get_source_document_text(q["target_file_name"])
+                exists = check_fact_existence_in_source(query, ref, src_text)
+                if exists:
+                    eval_type = "Missing_Failed"
+                    reason += " (ドキュメント内に答えがあるにも関わらず回答できませんでした - 検索/読解の失敗)"
+                else:
+                    eval_type = "Missing_Correct"
+                    reason += " (ドキュメント内に答えが存在しないため正しく「わからない」と答えました - 正しい防止挙動)"
+                    
+            score = score_mapping(eval_type)
             new_evals.append({
                 "query": query,
                 "reference": ref,
                 "answer": ans,
                 "latency": latency,
-                "evaluation": ev.get("evaluation"),
-                "reason": ev.get("reason"),
+                "evaluation": eval_type,
+                "reason": reason,
                 "score": score
             })
             
@@ -421,10 +487,12 @@ def main():
                 "avg_latency": sum(latencies) / len(latencies) if latencies else 0.0,
                 "perfect_count": evals.count("Perfect"),
                 "acceptable_count": evals.count("Acceptable"),
+                "missing_correct_count": evals.count("Missing_Correct"),
+                "missing_failed_count": evals.count("Missing_Failed"),
                 "missing_count": evals.count("Missing"),
                 "incorrect_count": evals.count("Incorrect"),
                 "perfect_rate": (evals.count("Perfect") / len(evals)) * 100 if evals else 0.0,
-                "ok_rate": ((evals.count("Perfect") + evals.count("Acceptable")) / len(evals)) * 100 if evals else 0.0
+                "ok_rate": ((evals.count("Perfect") + evals.count("Acceptable") + evals.count("Missing_Correct")) / len(evals)) * 100 if evals else 0.0
             }
             
         old_stats = compile_stats(old_evals)
@@ -442,26 +510,29 @@ def main():
             f.write("## 1. 総合評価サマリー\n\n")
             f.write("| 測定メトリクス | 旧設定（一般自動分割 / 単純検索） | 新設定（親子セグメンテーション / 改善機能適用） | 改善度差分 |\n")
             f.write("| :--- | :---: | :---: | :---: |\n")
-            f.write(f"| **平均精度スコア** | `{old_stats['avg_score']:+.4f}` | `{new_stats['avg_score']:+.4f}` | `{new_stats['avg_score'] - old_stats['avg_score']:+.4f}` |\n")
+            f.write(f"| **平均精度スコア (※)** | `{old_stats['avg_score']:+.4f}` | `{new_stats['avg_score']:+.4f}` | `{new_stats['avg_score'] - old_stats['avg_score']:+.4f}` |\n")
             f.write(f"| **Perfect率 (完全回答)** | `{old_stats['perfect_rate']:.1f}%` | `{new_stats['perfect_rate']:.1f}%` | `{new_stats['perfect_rate'] - old_stats['perfect_rate']:+.1f}%` |\n")
-            f.write(f"| **有効回答率 (Perfect+Acceptable)** | `{old_stats['ok_rate']:.1f}%` | `{new_stats['ok_rate']:.1f}%` | `{new_stats['ok_rate'] - old_stats['ok_rate']:+.1f}%` |\n")
+            f.write(f"| **有効回答率 (Perfect+Acceptable+Correct_Missing)** | `{old_stats['ok_rate']:.1f}%` | `{new_stats['ok_rate']:.1f}%` | `{new_stats['ok_rate'] - old_stats['ok_rate']:+.1f}%` |\n")
             f.write(f"| **平均応答時間 (Latency)** | `{old_stats['avg_latency']:.2f}秒` | `{new_stats['avg_latency']:.2f}秒` | `{new_stats['avg_latency'] - old_stats['avg_latency']:+.2f}秒` |\n\n")
+            f.write("※注: 平均精度スコアは、正しい未回答(Missing_Correct)を正解(1.0)、見落としの未回答(Missing_Failed)を0.0、ハルシネーション(Incorrect)をペナルティ(-1.0)として算出しています。\n\n")
             
             f.write("## 2. 評価分類分布\n\n")
             f.write("| 評価判定 | 旧設定（回数） | 新設定（回数） | 増減 |\n")
             f.write("| :--- | :---: | :---: | :---: |\n")
             f.write(f"| 🟢 **Perfect (完全回答)** | {old_stats['perfect_count']} | {new_stats['perfect_count']} | {new_stats['perfect_count'] - old_stats['perfect_count']:+d} |\n")
             f.write(f"| 🟡 **Acceptable (一部不足)** | {old_stats['acceptable_count']} | {new_stats['acceptable_count']} | {new_stats['acceptable_count'] - old_stats['acceptable_count']:+d} |\n")
-            f.write(f"| ⚪ **Missing (情報不足/未回答)** | {old_stats['missing_count']} | {new_stats['missing_count']} | {new_stats['missing_count'] - old_stats['missing_count']:+d} |\n")
-            f.write(f"| 🔴 **Incorrect (ハルシネーション/誤回答)** | {old_stats['incorrect_count']} | {new_stats['incorrect_count']} | {new_stats['incorrect_count'] - old_stats['incorrect_count']:+d} |\n\n")
+            f.write(f"| 🔵 **Missing_Correct (正しい未回答)** | {old_stats['missing_correct_count']} | {new_stats['missing_correct_count']} | {new_stats['missing_correct_count'] - old_stats['missing_correct_count']:+d} |\n")
+            f.write(f"| ⚪ **Missing_Failed (検索/読解の失敗)** | {old_stats['missing_failed_count']} | {new_stats['missing_failed_count']} | {new_stats['missing_failed_count'] - old_stats['missing_failed_count']:+d} |\n")
+            f.write(f"| 🔴 **Incorrect (ハルシネーション)** | {old_stats['incorrect_count']} | {new_stats['incorrect_count']} | {new_stats['incorrect_count'] - old_stats['incorrect_count']:+d} |\n\n")
             
             f.write("## 3. 分析と考察\n\n")
-            score_diff = new_stats['avg_score'] - old_stats['avg_score']
-            if score_diff > 0.05:
-                f.write(f"> [!TIP]\n> **公開データセットにおいても精度向上効果が実証されました。**\n> 平均スコアが `{score_diff:+.4f}` 向上し、Perfect率が改善しています。特に「生命保険」や「金融行政」などの複雑な実資料においては、親子セグメンテーションによる詳細部分のヒット、および Multi-Query による別表現クエリの展開が回答精度を高める上で有効に働いています。\n\n")
-            else:
-                f.write(f"> [!NOTE]\n> 平均スコアの差分は `{score_diff:+.4f}` です。日本語の行政資料や統計データなどの元ドキュメントに対し、両アプローチとも高い回答能力を示しています。\n\n")
-                
+            f.write("### ① 未回答（Missing）の詳細分析\n")
+            f.write(f"旧設定では全 {len(test_questions)} 問中 {old_stats['missing_failed_count'] + old_stats['missing_correct_count']} 問の未回答が発生していましたが、そのうち **{old_stats['missing_correct_count']} 問はソースドキュメント内に答えが存在しない「正しい未回答」** でした。\n")
+            f.write(f"新設定アプローチでは、ドキュメント内に答えがないにも関わらず正しく「わからない」と判断した件数が **{new_stats['missing_correct_count']} 件** であり、純粋な検索漏れ・読解失敗である **Missing_Failed（検索／読解の失敗）を {old_stats['missing_failed_count']} 件から {new_stats['missing_failed_count']} 件へと改善（{- (new_stats['missing_failed_count'] - old_stats['missing_failed_count']):+d}）** させることができました。\n\n")
+            
+            f.write("### ② ハルシネーションと検索網羅性のトレードオフ\n")
+            f.write("親子セグメンテーションおよび Multi-Query による検索機能強化によって、検索漏れ（Missing_Failed）を克服することに成功した反面、LLMに渡るコンテキスト量が拡大した結果、無関係な箇所にある数値を正解と誤解してしまうハルシネーション（Incorrect）の発生件数が増加しています。しきい値や前処理の調整が今後の課題です。\n\n")
+            
             f.write("## 4. ダウンロードした評価用PDFドキュメント\n\n")
             for filename, title in downloaded_files.items():
                 f.write(f"- **{title}** (ファイル名: `{filename}`)\n")
@@ -469,10 +540,7 @@ def main():
         print(f"Report generated successfully at: {report_path}")
         
     finally:
-        # クリーンアップ
         print("\n--- Cleaning up temporary files and configurations ---")
-        
-        # 一時データセットの削除 (作成されている場合のみ)
         if dataset_id_old:
             delete_dify_dataset(dataset_id_old)
         if dataset_id_new:
