@@ -68,7 +68,11 @@ def generate_local_summary(query: str, context: str) -> str:
         "Authorization": f"Bearer {LITELLM_KEY}",
         "Content-Type": "application/json"
     }
-    system_prompt = "以下に提供するドキュメント情報（コンテキスト）のみに基づいて、質問に日本語で正確に回答してください。\nドキュメントに記述されていない情報については、絶対に推測や自分の知識を使わずに「情報がありません」とだけ答えてください。\nハルシネーションを厳格に防止してください。"
+    system_prompt = """あなたは厳格な事実確認官（ファクトチェッカー）です。
+以下に提供するドキュメント情報（コンテキスト）のみに基づいて、質問に日本語で正確に回答してください。
+回答に含めるすべての主張、数値、日付は、提供されたコンテキストに物理的に存在する事実と一言一句一致している必要があります。
+コンテキストから推測できることであっても、明記されていない情報については、絶対に推測や独自の計算、論理的な補外、一般知識による補足を行わず、「情報がありません」とだけ答えてください。
+少しでも曖昧な点や根拠が不足している点があれば、回答せず「情報がありません」と出力してください。ハルシネーション（事実に基づかない記述）を極限まで防止してください。"""
 
     difficulty = classify_query_difficulty(query)
     local_model = os.environ.get("RAGY_LOCAL_MODEL", "qwen2.5-coder")
@@ -420,7 +424,7 @@ def search_dify_knowledge(query):
                         "top_k": 5,
                         "reranking_enable": True,
                         "score_threshold_enabled": True,
-                        "score_threshold": 0.4,
+                        "score_threshold": 0.6,
                     },
                 }
                 if metadata_conditions:
@@ -464,7 +468,7 @@ def search_dify_knowledge(query):
                     "top_k": 5,
                     "reranking_enable": True,
                     "score_threshold_enabled": True,
-                    "score_threshold": 0.4,
+                    "score_threshold": 0.6,
                 },
             }
             if metadata_conditions:

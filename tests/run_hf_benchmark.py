@@ -59,7 +59,8 @@ def fetch_documents_list():
     return list(reader)
 
 def download_pdfs(doc_list, target_dir, max_docs=5):
-    print(f"\n--- Downloading PDFs (Target: {max_docs} successful downloads) ---")
+    user_source_dir = "/Volumes/ORICO/src/tmp/eval/docs/evaluation_dataset"
+    print(f"\n--- Processing PDFs (Target: {max_docs} successful documents) ---")
     os.makedirs(target_dir, exist_ok=True)
     downloaded_files = {}
     
@@ -72,13 +73,30 @@ def download_pdfs(doc_list, target_dir, max_docs=5):
         if success_count >= max_docs:
             break
             
-        url = doc.get("url")
         file_name = doc.get("file_name")
-        if not url or not file_name:
+        url = doc.get("url")
+        if not file_name:
             continue
             
         dest_path = os.path.join(target_dir, file_name)
-        print(f"Trying to download: {file_name} from {url}...")
+        user_file_path = os.path.join(user_source_dir, file_name)
+        
+        # 1. ユーザー提供ディレクトリからのコピー
+        if os.path.exists(user_file_path):
+            print(f"Copying from user dataset: {file_name}...")
+            try:
+                shutil.copy2(user_file_path, dest_path)
+                print(f"  Successfully copied: {file_name}")
+                downloaded_files[file_name] = doc.get("title")
+                success_count += 1
+                continue
+            except Exception as e:
+                print(f"  Failed to copy {file_name} from user dataset: {e}")
+                
+        # 2. ネットからのダウンロードフォールバック
+        if not url:
+            continue
+        print(f"Trying to download (fallback): {file_name} from {url}...")
         try:
             r = requests.get(url, headers=headers, timeout=20, stream=True)
             if r.status_code == 200:
@@ -93,7 +111,7 @@ def download_pdfs(doc_list, target_dir, max_docs=5):
             print(f"  Failed to download: {e}")
             
     if not downloaded_files:
-        raise Exception("Failed to download any PDF files from the dataset.")
+        raise Exception("Failed to process any PDF files from either user dataset or URL download.")
     return downloaded_files
 
 def fetch_questions(downloaded_filenames):
@@ -347,15 +365,15 @@ def main():
     timestamp = int(time.time())
     
     try:
-        # Step 1: データセットのロードとPDFダウンロード
+        # Step 1: データセットのロードとPDFダウンロード (最大15件をローカル優先で取得)
         doc_list = fetch_documents_list()
-        downloaded_files = download_pdfs(doc_list, eval_proj_dir, max_docs=3)
+        downloaded_files = download_pdfs(doc_list, eval_proj_dir, max_docs=15)
         
         all_questions = fetch_questions(downloaded_files.keys())
         
         if len(all_questions) < 50:
             print(f"Warning: Only {len(all_questions)} questions matched downloaded PDFs. Download more PDFs...")
-            downloaded_files.update(download_pdfs(doc_list[3:], eval_proj_dir, max_docs=5))
+            downloaded_files.update(download_pdfs(doc_list[3:], eval_proj_dir, max_docs=15))
             all_questions = fetch_questions(downloaded_files.keys())
             
         if not all_questions:
@@ -500,7 +518,7 @@ def main():
         
         report_dir = os.path.expanduser("~/agents/reports")
         os.makedirs(report_dir, exist_ok=True)
-        report_path = os.path.join(report_dir, "huggingface_eval_report.md")
+        report_path = os.path.join(report_dir, "huggingface_eval_report_v2.md")
         
         with open(report_path, "w", encoding="utf-8") as f:
             f.write("# RAG精度改善ベンチマーク測定レポート (Hugging Face 公開データセット版)\n\n")
