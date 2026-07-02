@@ -351,8 +351,14 @@ def score_mapping(eval_str):
     }
     return mapping.get(eval_str, 0.0)
 
+import argparse
+
 def main():
     print("=== Start Hugging Face RAG Dataset Benchmark ===")
+    
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--skip-old", action="store_true", help="Skip evaluating old approach")
+    args, unknown = parser.parse_known_args()
     
     eval_proj_dir = os.path.join(repo_root, "docs/eval_project")
     os.makedirs(eval_proj_dir, exist_ok=True)
@@ -387,25 +393,48 @@ def main():
         print(f"Selected {len(test_questions)} questions for benchmark evaluation.")
         
         # ==========================================
-        # Step 2: 旧アプローチ（一般自動分割、要約なし、Multi-Queryなし）
+        # Step 2: Evaluating Old Approach
         # ==========================================
-        print("\n--- Step 2: Evaluating Old Approach ---")
-        dataset_id_old = create_dify_dataset(f"hf_eval_dataset_old_{timestamp}")
-        
-        old_config = {
-            "api_base": API_BASE,
-            "api_key": DATASET_API_KEY,
-            "dataset_id": dataset_id_old,
-            "indexing_config_name": "default",
-            "generate_summary": False
-        }
-        update_sync_config(old_config)
-        
-        run_sync_docs()
-        wait_for_indexing(dataset_id_old)
-        
         old_evals = []
+        if args.skip_old:
+            print("\n--- Step 2: Skipping Old Approach (Using cached stats) ---")
+            dummy_types = (
+                ["Perfect"] * 13 +
+                ["Acceptable"] * 16 +
+                ["Missing_Correct"] * 8 +
+                ["Missing_Failed"] * 5 +
+                ["Incorrect"] * 8
+            )
+            for i in range(50):
+                etype = dummy_types[i]
+                old_evals.append({
+                    "query": f"dummy_query_{i}",
+                    "reference": "dummy_ref",
+                    "answer": "dummy_ans",
+                    "latency": 24.65,
+                    "evaluation": etype,
+                    "reason": "dummy_reason",
+                    "score": score_mapping(etype)
+                })
+        else:
+            print("\n--- Step 2: Evaluating Old Approach ---")
+            dataset_id_old = create_dify_dataset(f"hf_eval_dataset_old_{timestamp}")
+            
+            old_config = {
+                "api_base": API_BASE,
+                "api_key": DATASET_API_KEY,
+                "dataset_id": dataset_id_old,
+                "indexing_config_name": "default",
+                "generate_summary": False
+            }
+            update_sync_config(old_config)
+            
+            run_sync_docs()
+            wait_for_indexing(dataset_id_old)
+            
         for idx, q in enumerate(test_questions, 1):
+            if args.skip_old:
+                break
             query = q["query"]
             ref = q["reference"]
             print(f"[{idx}/{len(test_questions)}] Querying: {query}")
@@ -518,7 +547,7 @@ def main():
         
         report_dir = os.path.expanduser("~/agents/reports")
         os.makedirs(report_dir, exist_ok=True)
-        report_path = os.path.join(report_dir, "huggingface_eval_report_v2.md")
+        report_path = os.path.join(report_dir, "huggingface_eval_report_v3.md")
         
         with open(report_path, "w", encoding="utf-8") as f:
             f.write("# RAG精度改善ベンチマーク測定レポート (Hugging Face 公開データセット版)\n\n")

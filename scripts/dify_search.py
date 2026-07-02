@@ -266,7 +266,7 @@ Example output:
     else:
         if query not in queries:
             queries.insert(0, query)
-        queries = queries[:3]
+        queries = queries[:2]
     return queries
 
 
@@ -403,7 +403,7 @@ def search_dify_knowledge(query):
     current_query = query
     retrieved_segments = []
     seen_contents = set()
-    max_loops = 3
+    max_loops = 2
 
     print(f"=== Knowledge search results for [Project: {project_id}] (Self-RAG/Local Synthesis with Multi-Query) ===")
 
@@ -424,7 +424,7 @@ def search_dify_knowledge(query):
                         "top_k": 5,
                         "reranking_enable": True,
                         "score_threshold_enabled": True,
-                        "score_threshold": 0.6,
+                        "score_threshold": 0.5,
                     },
                 }
                 if metadata_conditions:
@@ -438,7 +438,7 @@ def search_dify_knowledge(query):
                 return []
 
             all_records = []
-            with ThreadPoolExecutor(max_workers=3) as executor:
+            with ThreadPoolExecutor(max_workers=2) as executor:
                 futures = {executor.submit(retrieve_single, q): q for q in queries}
                 for future in futures:
                     q = futures[future]
@@ -468,7 +468,7 @@ def search_dify_knowledge(query):
                     "top_k": 5,
                     "reranking_enable": True,
                     "score_threshold_enabled": True,
-                    "score_threshold": 0.6,
+                    "score_threshold": 0.5,
                 },
             }
             if metadata_conditions:
